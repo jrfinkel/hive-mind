@@ -1,0 +1,23 @@
+# Hive Mind — party game for events.
+# Same account/setup pattern as fuse: Hono worker + D1.
+name = "hive-mind"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# --- D1 (SQLite) database ---
+# Create it once with:  npx wrangler d1 create hive-mind-db
+# then paste the printed database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "hive-mind-db"
+database_id = "610563be-4e1e-40a3-a044-a8999a1d9c1e"
+migrations_dir = "migrations"
+
+# --- Workers AI: used to cluster free-text answers at scoring time ---
+[ai]
+binding = "AI"
+
+[vars]
+# Password for /admin. Change + redeploy to rotate.
+ADMIN_PASSWORD = "hive-boss"

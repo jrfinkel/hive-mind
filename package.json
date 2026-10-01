@@ -1,0 +1,21 @@
+{
+  "name": "hive-mind",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply hive-mind-db --local",
+    "migrate:remote": "wrangler d1 migrations apply hive-mind-db --remote"
+  },
+  "dependencies": {
+    "hono": "^4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "typescript": "^5",
+    "wrangler": "^4.100.0"
+  }
+}

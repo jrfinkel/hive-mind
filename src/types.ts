@@ -1,0 +1,27 @@
+export type Env = {
+  DB: D1Database;
+  AI: Ai;
+  ADMIN_PASSWORD: string;
+};
+
+export type Round = {
+  id: number;
+  question: string;
+  suggestion_id: number | null;
+  status: "open" | "scoring" | "scored";
+  opened_at: number;
+  closes_at: number | null;
+  scored_at: number | null;
+};
+
+export type Answer = {
+  id: number;
+  round_id: number;
+  player_id: string;
+  text: string;
+  cluster_id: number | null;
+  points: number;
+  created_at: number;
+};
+
+export const now = () => Math.floor(Date.now() / 1000);

@@ -169,11 +169,12 @@ async function computeSharedState(c: C): Promise<Record<string, unknown>> {
 
   // Precomputed at scoring time (see scoring.ts writeMeta).
   const { results: meta } = await c.env.DB.prepare(
-    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard')"
+    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over')"
   ).all<{ k: string; v: string }>();
   for (const m of meta) {
     if (m.k === "last_results") out.last = JSON.parse(m.v);
     if (m.k === "leaderboard") out.leaderboard = JSON.parse(m.v);
+    if (m.k === "game_over") out.finale = true;
   }
   out.leaderboard ??= [];
 
@@ -630,6 +631,9 @@ app.get("/admin", async (c) => {
   const { results: recent } = await c.env.DB.prepare(
     "SELECT * FROM rounds ORDER BY id DESC LIMIT 10"
   ).all<Round>();
+  const gameOver = !!(await c.env.DB.prepare(
+    "SELECT v FROM meta WHERE k = 'game_over'"
+  ).first());
 
   const minutesSelect = (formId: string) => `<select name="minutes" form="${formId}" title="Timer">
     <option value="1">1 min</option><option value="2" selected>2 min</option>
@@ -707,6 +711,17 @@ ${roundCard}
 <h2>Recent rounds</h2>
 <div class="card"><table><tr><th>#</th><th>Question</th><th>Status</th><th></th></tr>${recentRows || ""}</table>
   <p class="small"><a href="/results" style="color:var(--honey)">[ results ]</a></p>
+</div>
+<h2>End of game</h2>
+<div class="card">
+  ${
+    gameOver
+      ? `<span class="pill live">FINAL STANDINGS SHOWING ON BOARD</span>`
+      : `<form method="post" action="/admin/finale" onsubmit="return confirm('End the game? The board switches to the final standings.')">
+    <button class="btn" ${round ? "disabled title='Finish the current round first'" : ""}>End game</button>
+  </form>`
+  }
+  <p class="muted small" style="margin-bottom:0">Board shows the podium + leaderboard. Opening a new question resumes play.</p>
 </div>
 <h2>Danger zone</h2>
 <div class="card">
@@ -826,11 +841,21 @@ app.post("/admin/open", async (c) => {
   if (!thing) return c.redirect("/admin");
 
   const t = now();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "INSERT INTO rounds (question, num, suggestion_id, status, opened_at, closes_at) VALUES (?, ?, ?, 'open', ?, ?)"
+    ).bind(composeQuestion(num, thing), num, suggestionId, t, minutes > 0 ? t + minutes * 60 : null),
+    // A new question resumes play if the game had been ended.
+    c.env.DB.prepare("DELETE FROM meta WHERE k = 'game_over'"),
+  ]);
+  sharedCache = null;
+  return c.redirect("/admin");
+});
+
+app.post("/admin/finale", async (c) => {
   await c.env.DB.prepare(
-    "INSERT INTO rounds (question, num, suggestion_id, status, opened_at, closes_at) VALUES (?, ?, ?, 'open', ?, ?)"
-  )
-    .bind(composeQuestion(num, thing), num, suggestionId, t, minutes > 0 ? t + minutes * 60 : null)
-    .run();
+    "INSERT OR REPLACE INTO meta (k, v) VALUES ('game_over', '1')"
+  ).run();
   sharedCache = null;
   return c.redirect("/admin");
 });
@@ -1192,9 +1217,24 @@ function suggestionsHtml(s) {
     '</div>';
 }
 
+function podiumHtml(s) {
+  const lb = s.leaderboard || [];
+  const spot = (r, cls, medal) => r
+    ? '<div class="pspot ' + cls + '"><div class="pmedal">' + medal + '</div>' +
+      '<div class="pname">' + esc(r.name) + '</div><div class="ppts">' + r.pts + ' pts</div></div>'
+    : '';
+  return '<div class="podium">' + spot(lb[1], 'second', '2ND') + spot(lb[0], 'first', '1ST') + spot(lb[2], 'third', '3RD') + '</div>' +
+    (lb.length > 3
+      ? '<div class="bcols"><div class="bpanel"><table class="btable">' +
+        lb.slice(3, 10).map((r, i) =>
+          '<tr><td>#' + (i + 4) + '</td><td>' + esc(r.name) + '</td><td><strong>' + r.pts + '</strong></td></tr>').join('') +
+        '</table></div></div>'
+      : '');
+}
+
 function render(s) {
   const sugKey = (s.suggestions || []).slice(0, 5).map(g => g.id + '.' + g.score).join(',');
-  const key = [s.status, s.round && s.round.id, s.last && s.last.id, sugKey].join(':');
+  const key = [s.status, s.round && s.round.id, s.last && s.last.id, sugKey, s.finale ? 'F' : ''].join(':');
   const aEl = document.getElementById('bAnswered');
   if (aEl) aEl.textContent = s.answer_count;
   const pEl = document.getElementById('bActive');
@@ -1202,7 +1242,13 @@ function render(s) {
   if (key === viewKey) return;
   viewKey = key;
 
-  if (s.status === 'open') {
+  if (s.finale && s.status !== 'open' && s.status !== 'scoring') {
+    clearInterval(countdownTimer);
+    app.innerHTML = \`
+      \${bannerHtml}
+      <div class="bfinal">FINAL STANDINGS</div>
+      \${podiumHtml(s)}\`;
+  } else if (s.status === 'open') {
     app.innerHTML = \`
       \${bannerHtml}
       <div class="bq">\${esc(s.round.question)}</div>

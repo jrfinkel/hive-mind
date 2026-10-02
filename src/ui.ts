@@ -253,4 +253,20 @@ tr.me td { color: var(--honey); font-weight: 700; }
 }
 .board .btable { font-size: 1.1em; }
 .board .btable td { border-bottom: 1px dashed var(--muted); padding: 4px 10px; }
+.board .bfinal {
+  color: var(--honey); font-size: 2.2em; font-weight: 800; margin: 10px 0 0;
+  text-transform: uppercase; letter-spacing: 0.18em; text-shadow: 0 0 14px rgba(255,176,0,0.5);
+}
+.board .podium { display: flex; gap: 22px; justify-content: center; align-items: flex-end; margin: 26px 0 22px; }
+.board .pspot { background: #000; border: 2px solid var(--muted); padding: 16px 30px; min-width: 190px; }
+.board .pspot .pmedal { color: var(--muted); font-weight: 800; letter-spacing: 0.14em; }
+.board .pspot .pname { font-size: 1.8em; font-weight: 800; color: var(--ink); margin: 4px 0; overflow-wrap: anywhere; }
+.board .pspot .ppts { font-size: 1.2em; color: var(--honey); font-weight: 800; }
+.board .pspot.first {
+  border: 3px double var(--honey); padding: 26px 40px; min-width: 240px;
+  box-shadow: 0 0 26px rgba(255,176,0,0.35);
+}
+.board .pspot.first .pmedal { color: var(--honey); font-size: 1.3em; }
+.board .pspot.first .pname { font-size: 2.6em; color: var(--honey); text-shadow: 0 0 10px rgba(255,176,0,0.45); }
+.board .pspot.first .ppts { font-size: 1.5em; }
 `;

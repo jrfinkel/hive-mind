@@ -21,19 +21,24 @@ and account as fuse.
 
 ## How a round works
 
+Questions always have the form **“Name N things”** (e.g. “Name 3 important NLP
+researchers”); the suggest and admin forms have separate fields for the number
+and the thing, and players get N answer boxes.
+
 1. Admin picks a question from the suggestion queue (or types their own) and
    sets a timer (default 2 min, or no timer).
 2. Players on `/play` see the question instantly (pages poll every ~2.5 s) and
-   type a free-form answer. They can edit it until the round closes.
+   type their free-form answers (must all be different). They can edit them
+   until the round closes.
 3. The round closes when the timer runs out, every active player has answered
    (players active = polled in the last 45 s; needs ≥2 active and the round to
    be ≥20 s old), or the admin clicks **Close & score now**.
 4. Scoring sends all answers to Workers AI
    (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) to cluster equivalent answers.
    If the model call fails, scoring falls back to exact-match grouping (case /
-   punctuation insensitive) so the game never stalls. Each player gets points
-   equal to their cluster's size. Admin can **Rescore** any round to re-run
-   the clustering.
+   punctuation insensitive) so the game never stalls. Each answer earns points equal to its
+   cluster's size, and a player's round score is the sum over their answers.
+   Admin can **Rescore** any round to re-run the clustering.
 
 ## Develop
 

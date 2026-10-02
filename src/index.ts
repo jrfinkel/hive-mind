@@ -73,7 +73,7 @@ async function maybeAutoClose(c: C, round: Round | null): Promise<Round | null> 
     const stats = await c.env.DB.prepare(
       `SELECT
          (SELECT COUNT(*) FROM players WHERE last_seen >= ?1) AS active,
-         (SELECT COUNT(*) FROM answers a JOIN players p ON p.id = a.player_id
+         (SELECT COUNT(DISTINCT a.player_id) FROM answers a JOIN players p ON p.id = a.player_id
            WHERE a.round_id = ?2 AND p.last_seen >= ?1) AS answered_active`
     )
       .bind(t - ACTIVE_WINDOW, round.id)
@@ -130,6 +130,9 @@ points everyone in that group gets.</p>
 // Suggestions (public)
 // ---------------------------------------------------------------------------
 
+/** Compose the displayed question from its parts: "Name 3 important NLP researchers". */
+const composeQuestion = (num: number, thing: string) => `Name ${num} ${thing}`;
+
 app.get("/suggest", (c) => {
   const ok = c.req.query("ok");
   return c.html(
@@ -137,12 +140,18 @@ app.get("/suggest", (c) => {
       title: "Suggest a question",
       body: `
 <h1>Suggest a question</h1>
-<p class="muted">Good Hive Mind questions have lots of plausible answers, e.g.
-“Name a food you’d bring to a potluck” or “Name something you’d find in a junk drawer.”</p>
+<p class="muted">Questions are always “Name <em>N</em> <em>things</em>”, e.g.
+“Name 3 important NLP researchers” or “Name 1 food you’d bring to a potluck”.
+Pick things with lots of plausible answers!</p>
 ${ok ? `<div class="flash ok">Thanks! Your question is in the queue.</div>` : ""}
 <form class="card" method="post" action="/suggest">
   <label>Your question</label>
-  <textarea name="text" required maxlength="300" placeholder="Name a ..."></textarea>
+  <div class="qcompose">
+    <span class="qword">Name</span>
+    <input type="number" name="num" value="1" min="1" max="10" required class="qnum">
+    <input type="text" name="thing" required maxlength="280" class="qthing"
+      placeholder="important NLP researchers">
+  </div>
   <label>Your name <span class="muted small">(optional)</span></label>
   <input type="text" name="author" maxlength="60">
   <div class="btn-row"><button class="btn" type="submit">Submit question</button></div>
@@ -153,13 +162,14 @@ ${ok ? `<div class="flash ok">Thanks! Your question is in the queue.</div>` : ""
 
 app.post("/suggest", async (c) => {
   const form = await c.req.formData();
-  const text = String(form.get("text") ?? "").trim().slice(0, 300);
+  const thing = String(form.get("thing") ?? "").trim().slice(0, 280);
+  const num = Math.max(1, Math.min(10, Number(form.get("num") ?? 1) || 1));
   const author = String(form.get("author") ?? "").trim().slice(0, 60) || null;
-  if (text) {
+  if (thing) {
     await c.env.DB.prepare(
-      "INSERT INTO suggestions (text, author, created_at) VALUES (?, ?, ?)"
+      "INSERT INTO suggestions (text, num, author, created_at) VALUES (?, ?, ?, ?)"
     )
-      .bind(text, author, now())
+      .bind(thing, num, author, now())
       .run();
   }
   return c.redirect("/suggest?ok=1");
@@ -187,21 +197,37 @@ app.post("/api/join", async (c) => {
 });
 
 app.post("/api/answer", async (c) => {
-  const body = await c.req.json<{ player_id?: string; round_id?: number; text?: string }>();
-  const text = String(body.text ?? "").trim().slice(0, 200);
-  if (!body.player_id || !body.round_id || !text) return c.json({ error: "bad request" }, 400);
+  const body = await c.req.json<{ player_id?: string; round_id?: number; texts?: string[] }>();
+  const texts = (Array.isArray(body.texts) ? body.texts : [])
+    .map((s) => String(s ?? "").trim().slice(0, 200));
+  if (!body.player_id || !body.round_id || !texts.length || texts.some((s) => !s)) {
+    return c.json({ error: "Please fill in every answer." }, 400);
+  }
   const round = await c.env.DB.prepare(
     "SELECT * FROM rounds WHERE id = ? AND status = 'open'"
   )
     .bind(body.round_id)
     .first<Round>();
   if (!round) return c.json({ error: "Round is closed" }, 409);
-  await c.env.DB.prepare(
-    `INSERT INTO answers (round_id, player_id, text, created_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT (round_id, player_id) DO UPDATE SET text = excluded.text, created_at = excluded.created_at`
-  )
-    .bind(round.id, body.player_id, text, now())
-    .run();
+  if (texts.length !== round.num) {
+    return c.json({ error: `This question needs ${round.num} answer(s).` }, 400);
+  }
+  const normed = texts.map((s) => s.toLowerCase().replace(/\s+/g, " "));
+  if (new Set(normed).size !== normed.length) {
+    return c.json({ error: "Your answers must all be different." }, 400);
+  }
+  const t = now();
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM answers WHERE round_id = ? AND player_id = ?").bind(
+      round.id,
+      body.player_id
+    ),
+    ...texts.map((text, idx) =>
+      c.env.DB.prepare(
+        "INSERT INTO answers (round_id, player_id, idx, text, created_at) VALUES (?, ?, ?, ?, ?)"
+      ).bind(round.id, body.player_id, idx, text, t)
+    ),
+  ]);
   return c.json({ ok: true });
 });
 
@@ -221,7 +247,7 @@ app.get("/api/state", async (c) => {
 
   if (round) {
     const count = await c.env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM answers WHERE round_id = ?"
+      "SELECT COUNT(DISTINCT player_id) AS n FROM answers WHERE round_id = ?"
     )
       .bind(round.id)
       .first<{ n: number }>();
@@ -229,18 +255,19 @@ app.get("/api/state", async (c) => {
     out.round = {
       id: round.id,
       question: round.question,
+      num: round.num,
       closes_at: round.closes_at,
       seconds_left: round.closes_at ? Math.max(0, round.closes_at - t) : null,
     };
     out.answer_count = count?.n ?? 0;
     if (playerId) {
-      const mine = await c.env.DB.prepare(
-        "SELECT text FROM answers WHERE round_id = ? AND player_id = ?"
+      const { results: mine } = await c.env.DB.prepare(
+        "SELECT text FROM answers WHERE round_id = ? AND player_id = ? ORDER BY idx"
       )
         .bind(round.id, playerId)
-        .first<{ text: string }>();
-      out.answered = !!mine;
-      out.your_answer = mine?.text ?? null;
+        .all<{ text: string }>();
+      out.answered = mine.length > 0;
+      out.your_answers = mine.map((m) => m.text);
     }
   }
 
@@ -255,14 +282,19 @@ app.get("/api/state", async (c) => {
       clusters: clusters.slice(0, 10).map((cl) => ({ label: cl.label, size: cl.size })),
     };
     if (playerId) {
-      const mine = await c.env.DB.prepare(
+      const { results: mine } = await c.env.DB.prepare(
         `SELECT a.text, a.points, cl.label AS cluster_label
          FROM answers a LEFT JOIN clusters cl ON cl.id = a.cluster_id
-         WHERE a.round_id = ? AND a.player_id = ?`
+         WHERE a.round_id = ? AND a.player_id = ? ORDER BY a.idx`
       )
         .bind(last.id, playerId)
-        .first<{ text: string; points: number; cluster_label: string | null }>();
-      if (mine) lastOut.your = mine;
+        .all<{ text: string; points: number; cluster_label: string | null }>();
+      if (mine.length) {
+        lastOut.your = {
+          answers: mine,
+          total: mine.reduce((s, m) => s + m.points, 0),
+        };
+      }
     }
     out.last = lastOut;
   }
@@ -436,7 +468,7 @@ app.get("/admin", async (c) => {
   const round = await currentRound(c.env);
   const { results: pending } = await c.env.DB.prepare(
     "SELECT * FROM suggestions WHERE status = 'pending' ORDER BY id"
-  ).all<{ id: number; text: string; author: string | null }>();
+  ).all<{ id: number; text: string; num: number; author: string | null }>();
   const { results: recent } = await c.env.DB.prepare(
     "SELECT * FROM rounds ORDER BY id DESC LIMIT 10"
   ).all<Round>();
@@ -452,7 +484,7 @@ app.get("/admin", async (c) => {
   <span class="pill live">ROUND ${round.id} — ${round.status.toUpperCase()}</span>
   <div class="question">${esc(round.question)}</div>
   <div class="statgrid">
-    <div class="stat"><div class="n" id="answerCount">…</div><div class="l">answers</div></div>
+    <div class="stat"><div class="n" id="answerCount">…</div><div class="l">answered</div></div>
     <div class="stat"><div class="n" id="activeCount">…</div><div class="l">active players</div></div>
     <div class="stat"><div class="n countdown" id="countdown">${round.closes_at ? "…" : "—"}</div><div class="l">time left</div></div>
   </div>
@@ -472,7 +504,7 @@ app.get("/admin", async (c) => {
     ? pending
         .map(
           (s) => `<div class="suggestion-row">
-  <span class="text">${esc(s.text)} ${s.author ? `<span class="muted small">— ${esc(s.author)}</span>` : ""}</span>
+  <span class="text">${esc(composeQuestion(s.num, s.text))} ${s.author ? `<span class="muted small">— ${esc(s.author)}</span>` : ""}</span>
   <form id="ask${s.id}" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="${s.id}"></form>
   ${minutesSelect(`ask${s.id}`)}
   <button class="btn sm" form="ask${s.id}" ${round ? "disabled title='Finish the current round first'" : ""}>Ask now</button>
@@ -504,7 +536,11 @@ ${roundCard}
   ${suggestionRows}
   <h3>Or ask your own</h3>
   <form id="custom" method="post" action="/admin/open">
-    <textarea name="question" maxlength="300" placeholder="Name a ..."></textarea>
+    <div class="qcompose">
+      <span class="qword">Name</span>
+      <input type="number" name="num" value="1" min="1" max="10" class="qnum">
+      <input type="text" name="thing" maxlength="280" class="qthing" placeholder="important NLP researchers">
+    </div>
     <div class="btn-row">${minutesSelect("custom")}
       <button class="btn" ${round ? "disabled title='Finish the current round first'" : ""}>Ask now</button></div>
   </form>
@@ -568,8 +604,9 @@ app.get("/api/admin/state", async (c) => {
   out.active_count = active?.n ?? 0;
   if (round) {
     const { results: answers } = await c.env.DB.prepare(
-      `SELECT p.name, a.text FROM answers a JOIN players p ON p.id = a.player_id
-       WHERE a.round_id = ? ORDER BY a.created_at`
+      `SELECT p.name, GROUP_CONCAT(a.text, ' · ') AS text
+       FROM answers a JOIN players p ON p.id = a.player_id
+       WHERE a.round_id = ? GROUP BY a.player_id ORDER BY MIN(a.created_at)`
     )
       .bind(round.id)
       .all<{ name: string; text: string }>();
@@ -588,27 +625,29 @@ app.post("/admin/open", async (c) => {
 
   const minutes = Math.max(0, Math.min(30, Number(form.get("minutes") ?? 2)));
   const suggestionId = Number(form.get("suggestion_id") ?? 0) || null;
-  let question = String(form.get("question") ?? "").trim().slice(0, 300);
+  let thing = String(form.get("thing") ?? "").trim().slice(0, 280);
+  let num = Math.max(1, Math.min(10, Number(form.get("num") ?? 1) || 1));
 
   if (suggestionId) {
     const s = await c.env.DB.prepare(
-      "SELECT text FROM suggestions WHERE id = ? AND status = 'pending'"
+      "SELECT text, num FROM suggestions WHERE id = ? AND status = 'pending'"
     )
       .bind(suggestionId)
-      .first<{ text: string }>();
+      .first<{ text: string; num: number }>();
     if (!s) return c.redirect("/admin");
-    question = s.text;
+    thing = s.text;
+    num = s.num;
     await c.env.DB.prepare("UPDATE suggestions SET status = 'used' WHERE id = ?")
       .bind(suggestionId)
       .run();
   }
-  if (!question) return c.redirect("/admin");
+  if (!thing) return c.redirect("/admin");
 
   const t = now();
   await c.env.DB.prepare(
-    "INSERT INTO rounds (question, suggestion_id, status, opened_at, closes_at) VALUES (?, ?, 'open', ?, ?)"
+    "INSERT INTO rounds (question, num, suggestion_id, status, opened_at, closes_at) VALUES (?, ?, ?, 'open', ?, ?)"
   )
-    .bind(question, suggestionId, t, minutes > 0 ? t + minutes * 60 : null)
+    .bind(composeQuestion(num, thing), num, suggestionId, t, minutes > 0 ? t + minutes * 60 : null)
     .run();
   return c.redirect("/admin");
 });
@@ -669,6 +708,8 @@ const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function renderJoin() {
+  // Rendered once; re-rendering on every poll would wipe what the user typed.
+  if (document.getElementById('joinForm')) return;
   app.innerHTML = \`
   <div class="center" style="margin-top:30px">
     <h1>🐝 Join the hive</h1>
@@ -691,8 +732,11 @@ function renderJoin() {
 function lastResultsHtml(s) {
   if (!s.last) return '';
   const your = s.last.your
-    ? \`<div class="flash \${s.last.your.points > 1 ? 'ok' : 'err'}">You said “\${esc(s.last.your.text)}” — <strong>\${s.last.your.points} point\${s.last.your.points === 1 ? '' : 's'}</strong>\${s.last.your.points > 1 ? ' (matched with ' + (s.last.your.points - 1) + ' other' + (s.last.your.points === 2 ? '' : 's') + '!)' : ' (no one matched you)'}\`
-      + '</div>'
+    ? \`<div class="flash \${s.last.your.total > s.last.your.answers.length ? 'ok' : 'err'}">
+        \${s.last.your.answers.map(a =>
+          \`“\${esc(a.text)}” — \${a.points} pt\${a.points === 1 ? '' : 's'}\${a.points > 1 ? ' (matched ' + (a.points - 1) + ' other' + (a.points === 2 ? '' : 's') + ')' : ''}\`
+        ).join('<br>')}
+        <br><strong>Total: \${s.last.your.total} point\${s.last.your.total === 1 ? '' : 's'}</strong></div>\`
     : '';
   const clusters = (s.last.clusters || []).map(c =>
     \`<div class="cluster"><span class="count">\${c.size}</span><strong>\${esc(c.label)}</strong></div>\`).join('');
@@ -730,32 +774,43 @@ function render() {
   viewKey = key;
 
   if (s.status === 'open' && (!s.answered || editing)) {
+    const n = s.round.num || 1;
+    const prev = s.your_answers || [];
+    const inputs = Array.from({ length: n }, (_, i) =>
+      \`<input type="text" class="ans" maxlength="200" value="\${esc(prev[i] || '')}"
+        placeholder="\${n > 1 ? 'Answer ' + (i + 1) : ''}" \${i === 0 ? 'autofocus' : ''}
+        style="margin-bottom:8px">\`).join('');
     app.innerHTML = \`
       <p class="small"><span class="pill live">ROUND LIVE</span> \${s.round.closes_at ? '<span class="countdown" id="cd"></span> left' : ''}</p>
       <div class="question">\${esc(s.round.question)}</div>
       <form class="card" id="answerForm">
-        <label>Your answer <span class="muted small">— what will most people say?</span></label>
-        <input type="text" id="answerInput" maxlength="200" autofocus value="\${esc(s.your_answer || '')}">
-        <div class="btn-row"><button class="btn">\${s.answered ? 'Update answer' : 'Lock it in'}</button></div>
+        <label>Your answer\${n > 1 ? 's' : ''} <span class="muted small">— what will most people say?</span></label>
+        \${inputs}
+        <div id="formErr"></div>
+        <div class="btn-row"><button class="btn">\${s.answered ? 'Update answers' : 'Lock it in'}</button></div>
       </form>
-      <p class="muted small"><span id="liveCount">\${s.answer_count}</span> answer(s) in so far</p>\`;
+      <p class="muted small"><span id="liveCount">\${s.answer_count}</span> player(s) answered so far</p>\`;
     startCountdown(s.round.closes_at);
     document.getElementById('answerForm').onsubmit = async (e) => {
       e.preventDefault();
-      const text = document.getElementById('answerInput').value.trim();
-      if (!text) return;
+      const errEl = document.getElementById('formErr');
+      const texts = [...document.querySelectorAll('#answerForm .ans')].map(el => el.value.trim());
+      if (texts.some(t => !t)) { errEl.innerHTML = '<div class="flash err">Please fill in every answer.</div>'; return; }
+      const normed = texts.map(t => t.toLowerCase().replace(/\\s+/g, ' '));
+      if (new Set(normed).size !== normed.length) { errEl.innerHTML = '<div class="flash err">Your answers must all be different.</div>'; return; }
       const r = await fetch('/api/answer', { method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ player_id: player.player_id, round_id: s.round.id, text }) });
+        body: JSON.stringify({ player_id: player.player_id, round_id: s.round.id, texts }) });
       if (r.ok) { editing = false; viewKey = ''; poll(); }
+      else { const j = await r.json().catch(() => ({})); errEl.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>'; }
     };
   } else if (s.status === 'open' && s.answered) {
     app.innerHTML = \`
       <p class="small"><span class="pill live">ROUND LIVE</span> \${s.round.closes_at ? '<span class="countdown" id="cd"></span> left' : ''}</p>
       <div class="question">\${esc(s.round.question)}</div>
       <div class="card center">
-        <p class="big">✅ Locked in: “\${esc(s.your_answer)}”</p>
-        <p class="muted"><span id="liveCount">\${s.answer_count}</span> answers in. Waiting for the round to close…</p>
-        <button class="btn secondary" id="editBtn">Change my answer</button>
+        <p class="big">✅ Locked in: \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
+        <p class="muted"><span id="liveCount">\${s.answer_count}</span> player(s) answered. Waiting for the round to close…</p>
+        <button class="btn secondary" id="editBtn">Change my answers</button>
       </div>\`;
     startCountdown(s.round.closes_at);
     document.getElementById('editBtn').onclick = () => { editing = true; viewKey = ''; render(); };

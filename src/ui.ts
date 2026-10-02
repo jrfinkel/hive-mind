@@ -121,6 +121,10 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .pill.live { background: #2c3d24; color: var(--good); }
 .suggestion-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid #3a3322; }
 .suggestion-row .text { flex: 1 1 280px; }
+.qcompose { display: flex; gap: 8px; align-items: center; }
+.qcompose .qword { font-weight: 800; color: var(--honey); font-size: 1.1em; }
+.qcompose .qnum { width: 74px; flex: none; }
+.qcompose .qthing { flex: 1; }
 .statgrid { display: flex; gap: 14px; flex-wrap: wrap; }
 .stat { background: var(--panel2); border-radius: 10px; padding: 10px 18px; text-align: center; }
 .stat .n { font-size: 1.6em; font-weight: 800; color: var(--honey); }

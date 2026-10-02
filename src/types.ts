@@ -7,6 +7,7 @@ export type Env = {
 export type Round = {
   id: number;
   question: string;
+  num: number; // how many answers each player gives
   suggestion_id: number | null;
   status: "open" | "scoring" | "scored";
   opened_at: number;

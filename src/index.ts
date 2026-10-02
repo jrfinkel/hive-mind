@@ -668,8 +668,8 @@ app.get("/admin", async (c) => {
 ${roundCard}
 <h2>Open a question</h2>
 <div class="card">
-  <h3 style="margin-top:0">Suggestions queue (${pending.length})</h3>
-  ${suggestionRows}
+  <h3 style="margin-top:0">Suggestions queue (<span id="sugCount">${pending.length}</span>)</h3>
+  <div id="sugList">${suggestionRows}</div>
   <h3>Or ask your own</h3>
   <form id="custom" method="post" action="/admin/open">
     <div class="qcompose">
@@ -693,8 +693,9 @@ ${roundCard}
   <p class="muted small" style="margin-bottom:0">Deletes everything: rounds, answers, scores, suggestions, votes, and players. <a href="/admin/logout" style="color:var(--muted)">Sign out</a></p>
 </div>`;
 
-  const script = round
-    ? `const roundId=${round.id}, roundStatus=${JSON.stringify(round.status)}, closesAt=${round.closes_at ?? "null"};
+  const script = `const roundKey=${JSON.stringify(round ? round.id + ":" + round.status : "none")};
+const hasRound=${round ? "true" : "false"}, closesAt=${round?.closes_at ?? "null"};
+const escj=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function tick(){
   if(closesAt===null) return;
   const left=Math.max(0, closesAt - Math.floor(Date.now()/1000));
@@ -702,24 +703,39 @@ function tick(){
   if(el) el.textContent=Math.floor(left/60)+':'+String(left%60).padStart(2,'0');
 }
 tick(); setInterval(tick,1000);
+let sugKey='';
+function renderSugs(s){
+  const sugs=s.suggestions||[];
+  const key=JSON.stringify(sugs);
+  if(key===sugKey) return;
+  sugKey=key;
+  document.getElementById('sugCount').textContent=sugs.length;
+  const minutes='<option value="1">1 min</option><option value="2" selected>2 min</option><option value="3">3 min</option><option value="5">5 min</option><option value="0">No timer</option>';
+  const dis=hasRound?' disabled title="Finish the current round first"':'';
+  document.getElementById('sugList').innerHTML = sugs.length ? sugs.map(g=>
+    '<div class="suggestion-row">'+
+    '<span class="pill" title="player votes">'+(g.score>0?'+':'')+g.score+'</span>'+
+    '<span class="text">'+escj('Name '+g.num+' '+g.text)+' <span class="muted small">— '+escj(g.author??'?')+'</span></span>'+
+    '<form id="ask'+g.id+'" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="'+g.id+'"></form>'+
+    '<select name="minutes" form="ask'+g.id+'" title="Timer">'+minutes+'</select>'+
+    '<button class="btn sm" form="ask'+g.id+'"'+dis+'>Ask now</button>'+
+    '<form method="post" action="/admin/suggestion/'+g.id+'/delete"><button class="btn sm secondary">Delete</button></form>'+
+    '</div>').join('') : '<p class="muted">No pending suggestions.</p>';
+}
 async function poll(){
   try{
     const s=await (await fetch('/api/admin/state')).json();
-    if((s.round? s.round.id+':'+s.round.status : 'none') !== roundId+':'+roundStatus){ location.reload(); return; }
-    document.getElementById('answerCount').textContent=s.answer_count;
-    document.getElementById('activeCount').textContent=s.active_count;
-    document.getElementById('liveAnswers').innerHTML=(s.answers||[])
-      .map(a=>'<div>'+a.name.replace(/</g,'&lt;')+': \u201c'+a.text.replace(/</g,'&lt;')+'\u201d</div>').join('');
+    if((s.round? s.round.id+':'+s.round.status : 'none') !== roundKey){ location.reload(); return; }
+    if(hasRound){
+      document.getElementById('answerCount').textContent=s.answer_count;
+      document.getElementById('activeCount').textContent=s.active_count;
+      document.getElementById('liveAnswers').innerHTML=(s.answers||[])
+        .map(a=>'<div>'+escj(a.name)+': \u201c'+escj(a.text)+'\u201d</div>').join('');
+    }
+    renderSugs(s);
   }catch(e){}
 }
-poll(); setInterval(poll,2000);`
-    : `async function poll(){
-  try{
-    const s=await (await fetch('/api/admin/state')).json();
-    if(s.round){ location.reload(); }
-  }catch(e){}
-}
-setInterval(poll,3000);`;
+poll(); setInterval(poll,2000);`;
 
   return c.html(layout({ title: "Admin", body, script }));
 });
@@ -751,6 +767,13 @@ app.get("/api/admin/state", async (c) => {
   } else {
     out.answer_count = 0;
   }
+  const { results: sugs } = await c.env.DB.prepare(
+    `SELECT s.id, s.text, s.num, p.name AS author,
+       COALESCE((SELECT SUM(vote) FROM suggestion_votes v WHERE v.suggestion_id = s.id), 0) AS score
+     FROM suggestions s LEFT JOIN players p ON p.id = s.player_id
+     WHERE s.status = 'pending' ORDER BY score DESC, s.id`
+  ).all<{ id: number; text: string; num: number; author: string | null; score: number }>();
+  out.suggestions = sugs;
   return c.json(out);
 });
 

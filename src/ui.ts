@@ -120,6 +120,16 @@ tr.me td { color: var(--honey); font-weight: 700; }
 }
 .pill.live { background: #2c3d24; color: var(--good); }
 .suggestion-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid #3a3322; }
+.sugrow { display: flex; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid #3a3322; }
+.sugrow:last-of-type { border-bottom: none; }
+.sugrow .sugtext { flex: 1; margin-left: 8px; }
+.sugscore { min-width: 1.8em; text-align: center; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+.votebtn {
+  background: var(--panel2); color: var(--muted); border: 1px solid #4a4028;
+  border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 0.95em;
+}
+.votebtn.active { background: var(--honey); color: #241a00; border-color: var(--honey); font-weight: 800; }
+.votebtn.down.active { background: var(--bad); color: #fff; border-color: var(--bad); }
 .suggestion-row .text { flex: 1 1 280px; }
 /* Big-screen board (/board) */
 .board { text-align: center; padding-top: 20px; }

@@ -133,44 +133,71 @@ points everyone in that group gets.</p>
 /** Compose the displayed question from its parts: "Name 3 important NLP researchers". */
 const composeQuestion = (num: number, thing: string) => `Name ${num} ${thing}`;
 
-app.get("/suggest", (c) => {
-  const ok = c.req.query("ok");
-  return c.html(
+app.get("/suggest", (c) =>
+  c.html(
     layout({
       title: "Suggest a question",
       body: `
 <h1>Suggest a question</h1>
 <p class="muted">Questions are always “Name <em>N</em> <em>things</em>”, e.g.
 “Name 3 important NLP researchers” or “Name 1 food you’d bring to a potluck”.
-Pick things with lots of plausible answers!</p>
-${ok ? `<div class="flash ok">Thanks! Your question is in the queue.</div>` : ""}
-<form class="card" method="post" action="/suggest">
-  <label>Your question</label>
-  <div class="qcompose">
-    <span class="qword">Name</span>
-    <input type="number" name="num" value="1" min="1" max="10" required class="qnum">
-    <input type="text" name="thing" required maxlength="280" class="qthing"
-      placeholder="important NLP researchers">
-  </div>
-  <div class="btn-row"><button class="btn" type="submit">Submit question</button></div>
-  <p class="muted small">Suggestions are anonymous.</p>
-</form>`,
+Pick things with lots of plausible answers! Players can vote on suggestions
+from the play page, and the host sees who suggested what.</p>
+<div id="sapp"><p class="muted">Loading…</p></div>`,
+      script: SUGGEST_JS,
     })
-  );
+  )
+);
+
+app.post("/api/suggest", async (c) => {
+  const body = await c.req.json<{ player_id?: string; num?: number; thing?: string }>();
+  const thing = String(body.thing ?? "").trim().slice(0, 280);
+  const num = Math.max(1, Math.min(10, Number(body.num ?? 1) || 1));
+  if (!body.player_id || !thing) return c.json({ error: "bad request" }, 400);
+  const player = await c.env.DB.prepare("SELECT id FROM players WHERE id = ?")
+    .bind(body.player_id)
+    .first();
+  if (!player) return c.json({ error: "Join with a name first." }, 403);
+  await c.env.DB.prepare(
+    "INSERT INTO suggestions (text, num, player_id, created_at) VALUES (?, ?, ?, ?)"
+  )
+    .bind(thing, num, body.player_id, now())
+    .run();
+  return c.json({ ok: true });
 });
 
-app.post("/suggest", async (c) => {
-  const form = await c.req.formData();
-  const thing = String(form.get("thing") ?? "").trim().slice(0, 280);
-  const num = Math.max(1, Math.min(10, Number(form.get("num") ?? 1) || 1));
-  if (thing) {
+app.post("/api/vote", async (c) => {
+  const body = await c.req.json<{ player_id?: string; suggestion_id?: number; vote?: number }>();
+  const vote = Number(body.vote);
+  if (!body.player_id || !body.suggestion_id || ![1, -1].includes(vote)) {
+    return c.json({ error: "bad request" }, 400);
+  }
+  const sug = await c.env.DB.prepare(
+    "SELECT id FROM suggestions WHERE id = ? AND status = 'pending'"
+  )
+    .bind(body.suggestion_id)
+    .first();
+  if (!sug) return c.json({ error: "unknown suggestion" }, 404);
+  const existing = await c.env.DB.prepare(
+    "SELECT vote FROM suggestion_votes WHERE suggestion_id = ? AND player_id = ?"
+  )
+    .bind(body.suggestion_id, body.player_id)
+    .first<{ vote: number }>();
+  if (existing && existing.vote === vote) {
+    // Tapping the same arrow again removes the vote.
     await c.env.DB.prepare(
-      "INSERT INTO suggestions (text, num, created_at) VALUES (?, ?, ?)"
+      "DELETE FROM suggestion_votes WHERE suggestion_id = ? AND player_id = ?"
     )
-      .bind(thing, num, now())
+      .bind(body.suggestion_id, body.player_id)
+      .run();
+  } else {
+    await c.env.DB.prepare(
+      "INSERT OR REPLACE INTO suggestion_votes (suggestion_id, player_id, vote) VALUES (?, ?, ?)"
+    )
+      .bind(body.suggestion_id, body.player_id, vote)
       .run();
   }
-  return c.redirect("/suggest?ok=1");
+  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -342,6 +369,21 @@ app.get("/api/state", async (c) => {
   ).all<{ name: string; pts: number }>();
   out.leaderboard = top;
 
+  // Pending suggestions for players to vote on while waiting.
+  if (playerId) {
+    const { results: sugs } = await c.env.DB.prepare(
+      `SELECT s.id, s.text, s.num,
+         COALESCE(SUM(v.vote), 0) AS score,
+         COALESCE((SELECT vote FROM suggestion_votes WHERE suggestion_id = s.id AND player_id = ?1), 0) AS your_vote
+       FROM suggestions s LEFT JOIN suggestion_votes v ON v.suggestion_id = s.id
+       WHERE s.status = 'pending'
+       GROUP BY s.id ORDER BY score DESC, s.id LIMIT 30`
+    )
+      .bind(playerId)
+      .all<{ id: number; text: string; num: number; score: number; your_vote: number }>();
+    out.suggestions = sugs;
+  }
+
   return c.json(out);
 });
 
@@ -504,8 +546,11 @@ app.get("/admin", async (c) => {
   const t = now();
   const round = await currentRound(c.env);
   const { results: pending } = await c.env.DB.prepare(
-    "SELECT * FROM suggestions WHERE status = 'pending' ORDER BY id"
-  ).all<{ id: number; text: string; num: number; author: string | null }>();
+    `SELECT s.id, s.text, s.num, p.name AS author,
+       COALESCE((SELECT SUM(vote) FROM suggestion_votes v WHERE v.suggestion_id = s.id), 0) AS score
+     FROM suggestions s LEFT JOIN players p ON p.id = s.player_id
+     WHERE s.status = 'pending' ORDER BY score DESC, s.id`
+  ).all<{ id: number; text: string; num: number; author: string | null; score: number }>();
   const { results: recent } = await c.env.DB.prepare(
     "SELECT * FROM rounds ORDER BY id DESC LIMIT 10"
   ).all<Round>();
@@ -541,11 +586,12 @@ app.get("/admin", async (c) => {
     ? pending
         .map(
           (s) => `<div class="suggestion-row">
-  <span class="text">${esc(composeQuestion(s.num, s.text))} ${s.author ? `<span class="muted small">— ${esc(s.author)}</span>` : ""}</span>
+  <span class="pill" title="player votes">${s.score > 0 ? "+" : ""}${s.score}</span>
+  <span class="text">${esc(composeQuestion(s.num, s.text))} <span class="muted small">— ${esc(s.author ?? "?")}</span></span>
   <form id="ask${s.id}" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="${s.id}"></form>
   ${minutesSelect(`ask${s.id}`)}
   <button class="btn sm" form="ask${s.id}" ${round ? "disabled title='Finish the current round first'" : ""}>Ask now</button>
-  <form method="post" action="/admin/suggestion/${s.id}/reject"><button class="btn sm secondary">Reject</button></form>
+  <form method="post" action="/admin/suggestion/${s.id}/delete"><button class="btn sm secondary">Delete</button></form>
 </div>`
         )
         .join("")
@@ -698,12 +744,12 @@ app.post("/admin/close", async (c) => {
   return c.redirect("/admin");
 });
 
-app.post("/admin/suggestion/:id/reject", async (c) => {
-  await c.env.DB.prepare(
-    "UPDATE suggestions SET status = 'rejected' WHERE id = ? AND status = 'pending'"
-  )
-    .bind(Number(c.req.param("id")))
-    .run();
+app.post("/admin/suggestion/:id/delete", async (c) => {
+  const id = Number(c.req.param("id"));
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM suggestion_votes WHERE suggestion_id = ?").bind(id),
+    c.env.DB.prepare("DELETE FROM suggestions WHERE id = ? AND status = 'pending'").bind(id),
+  ]);
   return c.redirect("/admin");
 });
 
@@ -849,7 +895,8 @@ function render() {
       <div class="card center">
         <p class="big">✅ Locked in: \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
         <p class="muted"><span id="liveCount">\${s.answer_count}</span> player(s) answered. Waiting for the round to close…</p>
-      </div>\`;
+      </div>
+      <div id="sugSection"></div>\`;
     startCountdown(s.round.closes_at);
   } else if (s.status === 'scoring') {
     app.innerHTML = \`
@@ -861,7 +908,8 @@ function render() {
       <div class="card center"><p class="big">⏳ Waiting for the next question…</p>
       <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p>
       <p class="small"><a href="#" id="renameBtn" style="color:var(--muted)">Change my name</a></p></div>
-      \${lastResultsHtml(s)}\`;
+      \${lastResultsHtml(s)}
+      <div id="sugSection"></div>\`;
     document.getElementById('renameBtn').onclick = async (e) => {
       e.preventDefault();
       const name = (window.prompt('New name (your points come with you):', player.name) || '').trim();
@@ -879,15 +927,101 @@ function render() {
   }
 }
 
+function renderSuggestions(s) {
+  const el = document.getElementById('sugSection');
+  if (!el) return;
+  const sugs = s.suggestions || [];
+  el.innerHTML = '<h2>Vote on upcoming questions</h2><div class="card">' +
+    (sugs.length
+      ? sugs.map(g =>
+          '<div class="sugrow">' +
+          '<button class="votebtn' + (g.your_vote === 1 ? ' active' : '') + '" data-id="' + g.id + '" data-vote="1">▲</button>' +
+          '<span class="sugscore">' + g.score + '</span>' +
+          '<button class="votebtn down' + (g.your_vote === -1 ? ' active' : '') + '" data-id="' + g.id + '" data-vote="-1">▼</button>' +
+          '<span class="sugtext">Name ' + g.num + ' ' + esc(g.text) + '</span></div>').join('')
+      : '<p class="muted">Nothing in the queue yet.</p>') +
+    '<p class="small" style="margin-bottom:0"><a href="/suggest" style="color:var(--honey)">Suggest a question →</a></p></div>';
+  el.onclick = async (e) => {
+    const b = e.target.closest('button[data-vote]');
+    if (!b) return;
+    await fetch('/api/vote', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ player_id: player.player_id, suggestion_id: Number(b.dataset.id), vote: Number(b.dataset.vote) }) });
+    poll();
+  };
+}
+
 async function poll() {
   if (!player) { renderJoin(); return; }
   try {
     const r = await fetch('/api/state?player=' + encodeURIComponent(player.player_id));
-    if (r.ok) { state = await r.json(); render(); }
+    if (r.ok) { state = await r.json(); render(); renderSuggestions(state); }
   } catch {}
 }
 poll();
 setInterval(poll, 2500);
+`;
+
+// ---------------------------------------------------------------------------
+// Suggest page client script (requires a player identity so the host can see
+// who suggested what; shares the same localStorage identity as /play)
+// ---------------------------------------------------------------------------
+
+const SUGGEST_JS = `
+const LS = 'hiveMindPlayer';
+let player = null;
+try { player = JSON.parse(localStorage.getItem(LS) || 'null'); } catch {}
+const sapp = document.getElementById('sapp');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function renderJoin() {
+  sapp.innerHTML = \`
+  <form class="card" id="joinForm" style="max-width:380px">
+    <p class="muted small">Tell us who you are first — the host sees who suggested each question.</p>
+    <label>Your name</label>
+    <input type="text" id="nameInput" maxlength="40" autofocus required>
+    <div class="btn-row"><button class="btn">Continue</button></div>
+  </form>\`;
+  document.getElementById('joinForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('nameInput').value.trim();
+    if (!name) return;
+    const r = await fetch('/api/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+    if (r.ok) { player = await r.json(); localStorage.setItem(LS, JSON.stringify(player)); renderForm(); }
+  };
+}
+
+function renderForm() {
+  sapp.innerHTML = \`
+  <div id="sflash"></div>
+  <form class="card" id="sugForm">
+    <p class="muted small">Suggesting as <strong>\${esc(player.name)}</strong></p>
+    <label>Your question</label>
+    <div class="qcompose">
+      <span class="qword">Name</span>
+      <input type="number" id="sugNum" value="1" min="1" max="10" required class="qnum">
+      <input type="text" id="sugThing" required maxlength="280" class="qthing" placeholder="important NLP researchers">
+    </div>
+    <div class="btn-row"><button class="btn">Submit question</button></div>
+  </form>\`;
+  document.getElementById('sugForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const thing = document.getElementById('sugThing').value.trim();
+    const num = Number(document.getElementById('sugNum').value) || 1;
+    if (!thing) return;
+    const r = await fetch('/api/suggest', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ player_id: player.player_id, num, thing }) });
+    const flash = document.getElementById('sflash');
+    if (r.ok) {
+      flash.innerHTML = '<div class="flash ok">Thanks! “Name ' + num + ' ' + esc(thing) + '” is in the queue.</div>';
+      document.getElementById('sugThing').value = '';
+    } else {
+      const j = await r.json().catch(() => ({}));
+      flash.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>';
+    }
+  };
+}
+
+player ? renderForm() : renderJoin();
 `;
 
 // ---------------------------------------------------------------------------

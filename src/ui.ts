@@ -131,6 +131,14 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .votebtn.active { background: var(--honey); color: #241a00; border-color: var(--honey); font-weight: 800; }
 .votebtn.down.active { background: var(--bad); color: #fff; border-color: var(--bad); }
 .suggestion-row .text { flex: 1 1 280px; }
+.namebadge {
+  position: fixed; top: 10px; right: 14px; z-index: 10;
+  background: var(--panel); border: 1px solid var(--honey-dark); border-radius: 999px;
+  padding: 5px 14px; font-weight: 700; color: var(--honey); cursor: pointer;
+  font-size: 0.9em; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.namebadge:hover { background: var(--panel2); }
+
 /* Big-screen board (/board) */
 .board { text-align: center; padding-top: 20px; }
 .board h1 { font-size: 2.2em; margin-bottom: 0.3em; }

@@ -30,6 +30,48 @@ async function isAdmin(c: C): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// Player gate: /play and /suggest need PLAYER_PASSWORD. The board advertises
+// /play?pw=<password>, which sets a cookie and redirects, so players arriving
+// from the board go straight to the name prompt.
+// ---------------------------------------------------------------------------
+
+async function playerToken(env: Env): Promise<string> {
+  const data = new TextEncoder().encode(`${env.PLAYER_PASSWORD}:hive-player-v1`);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function playerGate(c: C, next: () => Promise<void>) {
+  const token = await playerToken(c.env);
+  const cookie = c.req.header("Cookie") ?? "";
+  const m = cookie.match(/(?:^|;\s*)hm_player=([a-f0-9]+)/);
+  if (m && m[1] === token) return next();
+  if (c.req.query("pw") === c.env.PLAYER_PASSWORD) {
+    c.header(
+      "Set-Cookie",
+      `hm_player=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`
+    );
+    return c.redirect(new URL(c.req.url).pathname);
+  }
+  const err = c.req.query("pw") !== undefined ? `<div class="flash err">Wrong password.</div>` : "";
+  return c.html(
+    layout({
+      title: "Password",
+      nav: false,
+      body: `<div class="center"><form class="card" style="max-width:360px;margin:40px auto" method="get">
+  <h1>🐝 Hive Mind</h1>${err}
+  <label>Password</label>
+  <input type="password" name="pw" autofocus>
+  <div class="btn-row"><button class="btn" type="submit" style="width:100%">Enter</button></div>
+</form></div>`,
+    })
+  );
+}
+
+app.use("/play", playerGate);
+app.use("/suggest", playerGate);
+
+// ---------------------------------------------------------------------------
 // Round helpers
 // ---------------------------------------------------------------------------
 
@@ -109,17 +151,14 @@ app.get("/", (c) =>
   c.html(
     layout({
       title: "Home",
+      nav: false,
       body: `
-<h1>🐝 Hive Mind</h1>
-<p class="muted">Think like the group! Answer each question with whatever you think
-<em>most other people</em> will say. The more players who match your answer, the more
-points everyone in that group gets.</p>
-<div class="card center">
-  <a class="btn big" href="/play">Join the game</a>
-  <div class="btn-row" style="justify-content:center">
-    <a class="btn secondary" href="/suggest">Suggest a question</a>
-    <a class="btn secondary" href="/results">Results</a>
-    <a class="btn secondary" href="/leaderboard">Leaderboard</a>
+<div class="center" style="margin-top:60px">
+  <h1>🐝 Hive Mind</h1>
+  <div class="btn-row" style="justify-content:center;margin-top:30px">
+    <a class="btn" href="/play">Player</a>
+    <a class="btn secondary" href="/board">Board</a>
+    <a class="btn secondary" href="/admin">Admin</a>
   </div>
 </div>`,
     })
@@ -137,7 +176,9 @@ app.get("/suggest", (c) =>
   c.html(
     layout({
       title: "Suggest a question",
+      nav: false,
       body: `
+<p><a href="/play" style="color:var(--muted)">← back to the game</a></p>
 <h1>Suggest a question</h1>
 <p class="muted">Questions are always “Name <em>N</em> <em>things</em>”, e.g.
 “Name 3 important NLP researchers” or “Name 1 food you’d bring to a potluck”.
@@ -205,21 +246,31 @@ app.post("/api/vote", async (c) => {
 // ---------------------------------------------------------------------------
 
 app.get("/play", (c) =>
-  c.html(layout({ title: "Play", body: `<div id="app"><p class="muted">Loading…</p></div>`, script: PLAY_JS }))
+  c.html(
+    layout({
+      title: "Play",
+      nav: false,
+      body: `<div id="nameBadge" class="namebadge" style="display:none" title="Tap to change your name"></div>
+<div id="app"><p class="muted">Loading…</p></div>`,
+      script: PLAY_JS,
+    })
+  )
 );
 
 // Big-screen display: current question + live stats while a round runs,
 // results + leaderboard between rounds. Put this on the projector.
-app.get("/board", (c) =>
-  c.html(
+app.get("/board", (c) => {
+  const origin = new URL(c.req.url).origin;
+  const playUrl = `${origin}/play?pw=${encodeURIComponent(c.env.PLAYER_PASSWORD)}`;
+  return c.html(
     layout({
       title: "Big screen",
       nav: false,
       body: `<style>main{max-width:1150px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
-      script: BOARD_JS,
+      script: `const PLAY_URL = ${JSON.stringify(playUrl)};\n` + BOARD_JS,
     })
-  )
-);
+  );
+});
 
 app.post("/api/join", async (c) => {
   const { name } = await c.req.json<{ name?: string }>();
@@ -288,16 +339,20 @@ app.post("/api/answer", async (c) => {
 app.get("/api/state", async (c) => {
   const playerId = c.req.query("player") ?? "";
   const t = now();
+  let unknownPlayer = false;
   if (playerId) {
-    await c.env.DB.prepare("UPDATE players SET last_seen = ? WHERE id = ?")
+    const res = await c.env.DB.prepare("UPDATE players SET last_seen = ? WHERE id = ?")
       .bind(t, playerId)
       .run();
+    // Player id not in the DB (e.g. after a full reset) → client must re-join.
+    unknownPlayer = (res.meta.changes ?? 0) === 0;
   }
 
   let round = await currentRound(c.env);
   round = await maybeAutoClose(c, round);
 
   const out: Record<string, unknown> = { status: "idle", server_time: t };
+  if (unknownPlayer) out.unknown_player = true;
 
   const active = await c.env.DB.prepare(
     "SELECT COUNT(*) AS n FROM players WHERE last_seen >= ?"
@@ -635,10 +690,10 @@ ${roundCard}
 </div>
 <h2>Danger zone</h2>
 <div class="card">
-  <form method="post" action="/admin/reset" onsubmit="return confirm('Delete ALL rounds, answers, and scores? Suggestions and players are kept.')">
+  <form method="post" action="/admin/reset" onsubmit="return confirm('Delete EVERYTHING? All rounds, answers, scores, suggestions, votes, and players.')">
     <button class="btn danger">Reset game</button>
   </form>
-  <p class="muted small" style="margin-bottom:0">Deletes all rounds, answers, and scores (keeps players and suggestions). <a href="/admin/logout" style="color:var(--muted)">Sign out</a></p>
+  <p class="muted small" style="margin-bottom:0">Deletes everything: rounds, answers, scores, suggestions, votes, and players. <a href="/admin/logout" style="color:var(--muted)">Sign out</a></p>
 </div>`;
 
   const script = round
@@ -771,10 +826,15 @@ app.post("/admin/rescore/:id", async (c) => {
 });
 
 app.post("/admin/reset", async (c) => {
+  // Full wipe: rounds, answers, scores, suggestions, votes, AND players.
+  // Phones holding a stale player id get bounced back to the name prompt.
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM answers"),
     c.env.DB.prepare("DELETE FROM clusters"),
     c.env.DB.prepare("DELETE FROM rounds"),
+    c.env.DB.prepare("DELETE FROM suggestion_votes"),
+    c.env.DB.prepare("DELETE FROM suggestions"),
+    c.env.DB.prepare("DELETE FROM players"),
   ]);
   return c.redirect("/admin");
 });
@@ -794,24 +854,47 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 function renderJoin() {
   // Rendered once; re-rendering on every poll would wipe what the user typed.
   if (document.getElementById('joinForm')) return;
+  updateBadge();
   app.innerHTML = \`
   <div class="center" style="margin-top:30px">
-    <h1>🐝 Join the hive</h1>
-    <p class="muted">Answer each question with what you think <em>most people</em> will say.<br>Match more people = more points.</p>
+    <h1>🐝 Hive Mind</h1>
     <form class="card" style="max-width:380px;margin:0 auto" id="joinForm">
-      <label>Your name</label>
+      <label style="font-size:1.2em">What is your name?</label>
       <input type="text" id="nameInput" maxlength="40" autofocus required>
-      <div class="btn-row"><button class="btn" style="width:100%">Join</button></div>
+      <div class="btn-row"><button class="btn" style="width:100%">Enter</button></div>
     </form>
+    <p class="muted small" style="max-width:380px;margin:14px auto">Answer each question with what you think <em>most people</em> will say. Match more people = more points.</p>
   </div>\`;
   document.getElementById('joinForm').onsubmit = async (e) => {
     e.preventDefault();
     const name = document.getElementById('nameInput').value.trim();
     if (!name) return;
     const r = await fetch('/api/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
-    if (r.ok) { player = await r.json(); localStorage.setItem(LS, JSON.stringify(player)); viewKey=''; poll(); }
+    if (r.ok) { player = await r.json(); localStorage.setItem(LS, JSON.stringify(player)); updateBadge(); viewKey=''; poll(); }
   };
 }
+
+function updateBadge() {
+  const badge = document.getElementById('nameBadge');
+  if (!player) { badge.style.display = 'none'; return; }
+  badge.textContent = '🐝 ' + player.name;
+  badge.style.display = 'block';
+  badge.onclick = async () => {
+    const name = (window.prompt('Change your name (your points come with you):', player.name) || '').trim();
+    if (!name || name === player.name) return;
+    const r = await fetch('/api/rename', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ player_id: player.player_id, name }) });
+    if (r.ok) {
+      const j = await r.json();
+      player.name = j.name;
+      localStorage.setItem(LS, JSON.stringify(player));
+      updateBadge();
+      viewKey = '';
+      poll();
+    }
+  };
+}
+updateBadge();
 
 function lastResultsHtml(s) {
   if (!s.last) return '';
@@ -906,24 +989,9 @@ function render() {
   } else {
     app.innerHTML = \`
       <div class="card center"><p class="big">⏳ Waiting for the next question…</p>
-      <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p>
-      <p class="small"><a href="#" id="renameBtn" style="color:var(--muted)">Change my name</a></p></div>
+      <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p></div>
       \${lastResultsHtml(s)}
       <div id="sugSection"></div>\`;
-    document.getElementById('renameBtn').onclick = async (e) => {
-      e.preventDefault();
-      const name = (window.prompt('New name (your points come with you):', player.name) || '').trim();
-      if (!name || name === player.name) return;
-      const r = await fetch('/api/rename', { method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ player_id: player.player_id, name }) });
-      if (r.ok) {
-        const j = await r.json();
-        player.name = j.name;
-        localStorage.setItem(LS, JSON.stringify(player));
-        viewKey = '';
-        poll();
-      }
-    };
   }
 }
 
@@ -954,7 +1022,20 @@ async function poll() {
   if (!player) { renderJoin(); return; }
   try {
     const r = await fetch('/api/state?player=' + encodeURIComponent(player.player_id));
-    if (r.ok) { state = await r.json(); render(); renderSuggestions(state); }
+    if (r.ok) {
+      state = await r.json();
+      if (state.unknown_player) {
+        // Game was reset — this identity no longer exists, start over.
+        localStorage.removeItem(LS);
+        player = null;
+        viewKey = '';
+        app.innerHTML = '';
+        renderJoin();
+        return;
+      }
+      render();
+      renderSuggestions(state);
+    }
   } catch {}
 }
 poll();
@@ -1014,6 +1095,11 @@ function renderForm() {
     if (r.ok) {
       flash.innerHTML = '<div class="flash ok">Thanks! “Name ' + num + ' ' + esc(thing) + '” is in the queue.</div>';
       document.getElementById('sugThing').value = '';
+    } else if (r.status === 403) {
+      // Game was reset — this identity no longer exists, start over.
+      localStorage.removeItem(LS);
+      player = null;
+      renderJoin();
     } else {
       const j = await r.json().catch(() => ({}));
       flash.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>';
@@ -1032,7 +1118,7 @@ const BOARD_JS = `
 const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let viewKey = '', countdownTimer = null;
-const joinHint = '<p class="bjoin">📱 Play at <strong>' + location.host + '/play</strong> · suggest questions at <strong>' + location.host + '/suggest</strong></p>';
+const joinHint = '<p class="bjoin">📱 Play at <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a></p>';
 
 function startCountdown(closesAt) {
   clearInterval(countdownTimer);

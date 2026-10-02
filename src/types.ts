@@ -2,6 +2,7 @@ export type Env = {
   DB: D1Database;
   AI: Ai;
   ADMIN_PASSWORD: string;
+  PLAYER_PASSWORD: string;
 };
 
 export type Round = {

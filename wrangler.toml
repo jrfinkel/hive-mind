@@ -19,5 +19,8 @@ migrations_dir = "migrations"
 binding = "AI"
 
 [vars]
-# Password for /admin. Change + redeploy to rotate.
-ADMIN_PASSWORD = "hive-boss"
+# Passwords. Change + redeploy to rotate (signs everyone out of that area).
+ADMIN_PASSWORD = "lundard-boss"
+# Players need this to reach /play and /suggest. The /board page advertises a
+# play link with this baked in (?pw=...), so people in the room never type it.
+PLAYER_PASSWORD = "lundard"

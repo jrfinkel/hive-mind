@@ -127,6 +127,14 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
     )
       .bind(roundId)
       .first<{ n: number }>();
+    const { results: roundTop } = await env.DB.prepare(
+      `SELECT p.name, SUM(a.points) AS pts FROM answers a
+       JOIN players p ON p.id = a.player_id
+       WHERE a.round_id = ?
+       GROUP BY p.id ORDER BY pts DESC LIMIT 10`
+    )
+      .bind(roundId)
+      .all<{ name: string; pts: number }>();
     stmts.push(
       env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('last_results', ?)").bind(
         JSON.stringify({
@@ -134,6 +142,7 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
           question: round?.question ?? "",
           total_answers: total?.n ?? 0,
           clusters: cls,
+          top: roundTop,
         })
       )
     );

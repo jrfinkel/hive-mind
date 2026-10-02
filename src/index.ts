@@ -1180,10 +1180,10 @@ function startCountdown(closesAt) {
   countdownTimer = setInterval(tick, 500);
 }
 
-function leaderboardHtml(s) {
-  if (!(s.leaderboard || []).length) return '';
-  return '<div class="bpanel"><h2>High scores</h2><table class="btable">' +
-    s.leaderboard.map((r, i) =>
+function scoreTableHtml(title, rows) {
+  if (!(rows || []).length) return '';
+  return '<div class="bpanel"><h2>' + title + '</h2><table class="btable">' +
+    rows.map((r, i) =>
       '<tr><td>' + (['#1','#2','#3'][i] ?? '#' + (i + 1)) + '</td><td>' + esc(r.name) + '</td><td><strong>' + r.pts + '</strong></td></tr>').join('') +
     '</table></div>';
 }
@@ -1231,7 +1231,8 @@ function render(s) {
       <div class="bq">\${esc(s.last.question)}</div>
       <div class="bcols">
         <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
-        \${leaderboardHtml(s)}
+        \${scoreTableHtml('Round scores', s.last.top)}
+        \${scoreTableHtml('High scores', s.leaderboard)}
         \${suggestionsHtml(s)}
       </div>
       \${joinHint}\`;

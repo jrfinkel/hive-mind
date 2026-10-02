@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env, Round } from "./types";
 import { now } from "./types";
-import { layout, esc } from "./ui";
+import { layout, esc, BANNER } from "./ui";
 import { scoreRound } from "./scoring";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -59,7 +59,7 @@ async function playerGate(c: C, next: () => Promise<void>) {
       title: "Password",
       nav: false,
       body: `<div class="center"><form class="card" style="max-width:360px;margin:40px auto" method="get">
-  <h1>🐝 Hive Mind</h1>${err}
+  <h1>Hive Mind</h1>${err}
   <label>Password</label>
   <input type="password" name="pw" autofocus>
   <div class="btn-row"><button class="btn" type="submit" style="width:100%">Enter</button></div>
@@ -153,9 +153,10 @@ app.get("/", (c) =>
       title: "Home",
       nav: false,
       body: `
-<div class="center" style="margin-top:60px">
-  <h1>🐝 Hive Mind</h1>
-  <div class="btn-row" style="justify-content:center;margin-top:30px">
+<div class="center" style="margin-top:40px">
+  <pre class="banner" style="display:inline-block;text-align:left">${BANNER}</pre>
+  <p class="muted small" style="letter-spacing:0.3em">*** THINK LIKE THE GROUP ***</p>
+  <div class="btn-row" style="justify-content:center;margin-top:26px">
     <a class="btn" href="/play">Player</a>
     <a class="btn secondary" href="/board">Board</a>
     <a class="btn secondary" href="/admin">Admin</a>
@@ -267,7 +268,9 @@ app.get("/board", (c) => {
       title: "Big screen",
       nav: false,
       body: `<style>main{max-width:1150px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
-      script: `const PLAY_URL = ${JSON.stringify(playUrl)};\n` + BOARD_JS,
+      script:
+        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_TXT = ${JSON.stringify(BANNER)};\n` +
+        BOARD_JS,
     })
   );
 });
@@ -515,7 +518,7 @@ app.get("/leaderboard", async (c) => {
      GROUP BY p.id ORDER BY pts DESC, p.name LIMIT 100`
   ).all<{ name: string; pts: number; played: number }>();
 
-  const medals = ["🥇", "🥈", "🥉"];
+  const medals = ["#1", "#2", "#3"];
   const body = `<h1>Leaderboard</h1>
 ${
   rows.length
@@ -524,7 +527,7 @@ ${
   ${rows
     .map(
       (r, i) =>
-        `<tr><td>${medals[i] ?? i + 1}</td><td>${esc(r.name)}</td><td><strong>${r.pts}</strong></td><td class="muted">${r.played}</td></tr>`
+        `<tr><td>${medals[i] ?? "#" + (i + 1)}</td><td>${esc(r.name)}</td><td><strong>${r.pts}</strong></td><td class="muted">${r.played}</td></tr>`
     )
     .join("")}
 </table></div>`
@@ -667,7 +670,7 @@ app.get("/admin", async (c) => {
     .join("");
 
   const body = `<h1>Admin</h1>
-<p><a href="/board" target="_blank" style="color:var(--honey)">Open the big-screen board ↗</a> <span class="muted small">— put it on the projector</span></p>
+<p><a href="/board" target="_blank" style="color:var(--honey)">[ open the big-screen board ]</a> <span class="muted small">— put it on the projector</span></p>
 ${roundCard}
 <h2>Open a question</h2>
 <div class="card">
@@ -857,7 +860,7 @@ function renderJoin() {
   updateBadge();
   app.innerHTML = \`
   <div class="center" style="margin-top:30px">
-    <h1>🐝 Hive Mind</h1>
+    <h1>Hive Mind</h1>
     <form class="card" style="max-width:380px;margin:0 auto" id="joinForm">
       <label style="font-size:1.2em">What is your name?</label>
       <input type="text" id="nameInput" maxlength="40" autofocus required>
@@ -877,7 +880,7 @@ function renderJoin() {
 function updateBadge() {
   const badge = document.getElementById('nameBadge');
   if (!player) { badge.style.display = 'none'; return; }
-  badge.textContent = '🐝 ' + player.name;
+  badge.textContent = '> ' + player.name;
   badge.style.display = 'block';
   badge.onclick = async () => {
     const name = (window.prompt('Change your name (your points come with you):', player.name) || '').trim();
@@ -909,7 +912,7 @@ function lastResultsHtml(s) {
     \`<div class="cluster"><span class="count">\${c.size}</span><strong>\${esc(c.label)}</strong></div>\`).join('');
   const lb = (s.leaderboard || []).length
     ? '<h2>Top players</h2><div class="card"><table>' + s.leaderboard.map((r, i) =>
-        \`<tr\${player && r.name === player.name ? ' class="me"' : ''}><td>\${['🥇','🥈','🥉'][i] ?? i+1}</td><td>\${esc(r.name)}</td><td><strong>\${r.pts}</strong></td></tr>\`).join('')
+        \`<tr\${player && r.name === player.name ? ' class="me"' : ''}><td>\${['#1','#2','#3'][i] ?? '#'+(i+1)}</td><td>\${esc(r.name)}</td><td><strong>\${r.pts}</strong></td></tr>\`).join('')
       + '</table></div><p class="center"><a class="btn secondary" href="/leaderboard">Full leaderboard</a></p>'
     : '';
   return \`<h2>Last question</h2>
@@ -976,7 +979,7 @@ function render() {
       <p class="small"><span class="pill live">ROUND LIVE</span> \${s.round.closes_at ? '<span class="countdown" id="cd"></span> left' : ''}</p>
       <div class="question">\${esc(s.round.question)}</div>
       <div class="card center">
-        <p class="big">✅ Locked in: \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
+        <p class="big">[LOCKED IN] \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
         <p class="muted"><span id="liveCount">\${s.answer_count}</span> player(s) answered. Waiting for the round to close…</p>
       </div>
       <div id="sugSection"></div>\`;
@@ -984,11 +987,11 @@ function render() {
   } else if (s.status === 'scoring') {
     app.innerHTML = \`
       <div class="question">\${esc(s.round.question)}</div>
-      <div class="card center"><p class="big">🧮 Scoring…</p>
+      <div class="card center"><p class="big blink">SCORING IN PROGRESS</p>
       <p class="muted">The hive is comparing everyone's answers.</p></div>\`;
   } else {
     app.innerHTML = \`
-      <div class="card center"><p class="big">⏳ Waiting for the next question…</p>
+      <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p>
       <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p></div>
       \${lastResultsHtml(s)}
       <div id="sugSection"></div>\`;
@@ -1118,7 +1121,8 @@ const BOARD_JS = `
 const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let viewKey = '', countdownTimer = null;
-const joinHint = '<p class="bjoin">📱 Play at <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a></p>';
+const joinHint = '<p class="bjoin">&gt;&gt; join the game: <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a> &lt;&lt;</p>';
+const bannerHtml = '<pre class="banner">' + BANNER_TXT + '</pre>';
 
 function startCountdown(closesAt) {
   clearInterval(countdownTimer);
@@ -1135,9 +1139,9 @@ function startCountdown(closesAt) {
 
 function leaderboardHtml(s) {
   if (!(s.leaderboard || []).length) return '';
-  return '<div class="bpanel"><h2>🏆 Leaderboard</h2><table class="btable">' +
+  return '<div class="bpanel"><h2>High scores</h2><table class="btable">' +
     s.leaderboard.map((r, i) =>
-      '<tr><td>' + (['🥇','🥈','🥉'][i] ?? (i + 1)) + '</td><td>' + esc(r.name) + '</td><td><strong>' + r.pts + '</strong></td></tr>').join('') +
+      '<tr><td>' + (['#1','#2','#3'][i] ?? '#' + (i + 1)) + '</td><td>' + esc(r.name) + '</td><td><strong>' + r.pts + '</strong></td></tr>').join('') +
     '</table></div>';
 }
 
@@ -1152,7 +1156,7 @@ function render(s) {
 
   if (s.status === 'open') {
     app.innerHTML = \`
-      <h1>🐝 Hive Mind</h1>
+      \${bannerHtml}
       <div class="bq">\${esc(s.round.question)}</div>
       \${s.round.closes_at ? '<div class="bcd" id="bcd"></div>' : ''}
       <div class="bstats">
@@ -1163,15 +1167,15 @@ function render(s) {
     startCountdown(s.round.closes_at);
   } else if (s.status === 'scoring') {
     app.innerHTML = \`
-      <h1>🐝 Hive Mind</h1>
+      \${bannerHtml}
       <div class="bq">\${esc(s.round.question)}</div>
-      <div class="bcd">🧮</div>
-      <p class="muted" style="font-size:1.4em">Scoring — the hive is comparing answers…</p>\`;
+      <div class="bcd blink">SCORING</div>
+      <p class="muted" style="font-size:1.4em">The hive is comparing answers…</p>\`;
   } else if (s.last) {
     const clusters = (s.last.clusters || []).map(c =>
       '<div class="bcluster"><span class="count">' + c.size + '</span><span>' + esc(c.label) + '</span></div>').join('');
     app.innerHTML = \`
-      <h1>🐝 Hive Mind</h1>
+      \${bannerHtml}
       <div class="bq">\${esc(s.last.question)}</div>
       <div class="bcols">
         <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
@@ -1181,8 +1185,8 @@ function render(s) {
       \${joinHint}\`;
   } else {
     app.innerHTML = \`
-      <h1>🐝 Hive Mind</h1>
-      <div class="bq">Get ready…</div>
+      \${bannerHtml}
+      <div class="bq"><span class="blink">STAND BY</span></div>
       <div class="bstats">
         <div class="stat"><div class="n" id="bActive">\${s.active_count}</div><div class="l">players joined</div></div>
       </div>

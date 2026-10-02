@@ -155,7 +155,6 @@ app.get("/", (c) =>
       body: `
 <div class="center" style="margin-top:40px">
   <pre class="banner" style="display:inline-block;text-align:left">${BANNER}</pre>
-  <p class="muted small" style="letter-spacing:0.3em">*** THINK LIKE THE GROUP ***</p>
   <div class="btn-row" style="justify-content:center;margin-top:26px">
     <a class="btn" href="/play">Player</a>
     <a class="btn secondary" href="/board">Board</a>
@@ -181,10 +180,6 @@ app.get("/suggest", (c) =>
       body: `
 <p><a href="/play" style="color:var(--muted)">← back to the game</a></p>
 <h1>Suggest a question</h1>
-<p class="muted">Questions are always “Name <em>N</em> <em>things</em>”, e.g.
-“Name 3 important NLP researchers” or “Name 1 food you’d bring to a potluck”.
-Pick things with lots of plausible answers! Players can vote on suggestions
-from the play page, and the host sees who suggested what.</p>
 <div id="sapp"><p class="muted">Loading…</p></div>`,
       script: SUGGEST_JS,
     })
@@ -457,7 +452,7 @@ app.get("/results", async (c) => {
   let body = `<h1>Results</h1>`;
   const open = await currentRound(c.env);
   if (open) {
-    body += `<div class="flash ok">A round is in progress: “${esc(open.question)}” — results appear here when it’s scored.</div>`;
+    body += `<div class="flash ok">Round in progress: “${esc(open.question)}”</div>`;
   }
   if (!rounds.length) body += `<p class="muted">No rounds scored yet.</p>`;
 
@@ -632,12 +627,11 @@ app.get("/admin", async (c) => {
   ${
     round.status === "open"
       ? `<form method="post" action="/admin/close" class="btn-row"><button class="btn">Close &amp; score now</button></form>`
-      : `<p class="muted">Scoring in progress… this page refreshes automatically.</p>`
+      : `<p class="muted blink">Scoring</p>`
   }
 </div>`;
   } else {
-    roundCard = `<div class="card"><span class="pill">NO ACTIVE ROUND</span>
-  <p class="muted">Pick a question below to start the next round.</p></div>`;
+    roundCard = `<div class="card"><span class="pill">NO ACTIVE ROUND</span></div>`;
   }
 
   const suggestionRows = pending.length
@@ -653,7 +647,7 @@ app.get("/admin", async (c) => {
 </div>`
         )
         .join("")
-    : `<p class="muted">No pending suggestions. Send people to <a href="/suggest" style="color:var(--honey)">/suggest</a>!</p>`;
+    : `<p class="muted">No pending suggestions.</p>`;
 
   const recentRows = recent
     .map(
@@ -670,7 +664,7 @@ app.get("/admin", async (c) => {
     .join("");
 
   const body = `<h1>Admin</h1>
-<p><a href="/board" target="_blank" style="color:var(--honey)">[ open the big-screen board ]</a> <span class="muted small">— put it on the projector</span></p>
+<p><a href="/board" target="_blank" style="color:var(--honey)">[ open the big-screen board ]</a></p>
 ${roundCard}
 <h2>Open a question</h2>
 <div class="card">
@@ -689,7 +683,7 @@ ${roundCard}
 </div>
 <h2>Recent rounds</h2>
 <div class="card"><table><tr><th>#</th><th>Question</th><th>Status</th><th></th></tr>${recentRows || ""}</table>
-  <p class="muted small">Full answer breakdowns are on the <a href="/results" style="color:var(--honey)">results page</a>.</p>
+  <p class="small"><a href="/results" style="color:var(--honey)">[ results ]</a></p>
 </div>
 <h2>Danger zone</h2>
 <div class="card">
@@ -866,7 +860,6 @@ function renderJoin() {
       <input type="text" id="nameInput" maxlength="40" autofocus required>
       <div class="btn-row"><button class="btn" style="width:100%">Enter</button></div>
     </form>
-    <p class="muted small" style="max-width:380px;margin:14px auto">Answer each question with what you think <em>most people</em> will say. Match more people = more points.</p>
   </div>\`;
   document.getElementById('joinForm').onsubmit = async (e) => {
     e.preventDefault();
@@ -883,7 +876,7 @@ function updateBadge() {
   badge.textContent = '> ' + player.name;
   badge.style.display = 'block';
   badge.onclick = async () => {
-    const name = (window.prompt('Change your name (your points come with you):', player.name) || '').trim();
+    const name = (window.prompt('New name:', player.name) || '').trim();
     if (!name || name === player.name) return;
     const r = await fetch('/api/rename', { method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ player_id: player.player_id, name }) });
@@ -904,9 +897,9 @@ function lastResultsHtml(s) {
   const your = s.last.your
     ? \`<div class="flash \${s.last.your.total > s.last.your.answers.length ? 'ok' : 'err'}">
         \${s.last.your.answers.map(a =>
-          \`“\${esc(a.text)}” — \${a.points} pt\${a.points === 1 ? '' : 's'}\${a.points > 1 ? ' (matched ' + (a.points - 1) + ' other' + (a.points === 2 ? '' : 's') + ')' : ''}\`
+          \`“\${esc(a.text)}” — \${a.points} pt\${a.points === 1 ? '' : 's'}\`
         ).join('<br>')}
-        <br><strong>Total: \${s.last.your.total} point\${s.last.your.total === 1 ? '' : 's'}</strong></div>\`
+        <br><strong>Total: \${s.last.your.total} pt\${s.last.your.total === 1 ? '' : 's'}</strong></div>\`
     : '';
   const clusters = (s.last.clusters || []).map(c =>
     \`<div class="cluster"><span class="count">\${c.size}</span><strong>\${esc(c.label)}</strong></div>\`).join('');
@@ -954,13 +947,12 @@ function render() {
       <p class="small"><span class="pill live">ROUND LIVE</span> \${s.round.closes_at ? '<span class="countdown" id="cd"></span> left' : ''}</p>
       <div class="question">\${esc(s.round.question)}</div>
       <form class="card" id="answerForm">
-        <label>Your answer\${n > 1 ? 's' : ''} <span class="muted small">— what will most people say?</span></label>
+        <label>Your answer\${n > 1 ? 's' : ''}</label>
         \${inputs}
         <div id="formErr"></div>
         <div class="btn-row"><button class="btn">Lock it in</button></div>
-        <p class="muted small" style="margin-bottom:0">Careful — answers are final once locked in!</p>
       </form>
-      <p class="muted small"><span id="liveCount">\${s.answer_count}</span> player(s) answered so far</p>\`;
+      <p class="muted small"><span id="liveCount">\${s.answer_count}</span> answered</p>\`;
     startCountdown(s.round.closes_at);
     document.getElementById('answerForm').onsubmit = async (e) => {
       e.preventDefault();
@@ -980,19 +972,17 @@ function render() {
       <div class="question">\${esc(s.round.question)}</div>
       <div class="card center">
         <p class="big">[LOCKED IN] \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
-        <p class="muted"><span id="liveCount">\${s.answer_count}</span> player(s) answered. Waiting for the round to close…</p>
+        <p class="muted"><span id="liveCount">\${s.answer_count}</span> answered</p>
       </div>
       <div id="sugSection"></div>\`;
     startCountdown(s.round.closes_at);
   } else if (s.status === 'scoring') {
     app.innerHTML = \`
       <div class="question">\${esc(s.round.question)}</div>
-      <div class="card center"><p class="big blink">SCORING IN PROGRESS</p>
-      <p class="muted">The hive is comparing everyone's answers.</p></div>\`;
+      <div class="card center"><p class="big blink">SCORING</p></div>\`;
   } else {
     app.innerHTML = \`
-      <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p>
-      <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p></div>
+      <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p></div>
       \${lastResultsHtml(s)}
       <div id="sugSection"></div>\`;
   }
@@ -1060,7 +1050,6 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 function renderJoin() {
   sapp.innerHTML = \`
   <form class="card" id="joinForm" style="max-width:380px">
-    <p class="muted small">Tell us who you are first — the host sees who suggested each question.</p>
     <label>Your name</label>
     <input type="text" id="nameInput" maxlength="40" autofocus required>
     <div class="btn-row"><button class="btn">Continue</button></div>
@@ -1169,8 +1158,7 @@ function render(s) {
     app.innerHTML = \`
       \${bannerHtml}
       <div class="bq">\${esc(s.round.question)}</div>
-      <div class="bcd blink">SCORING</div>
-      <p class="muted" style="font-size:1.4em">The hive is comparing answers…</p>\`;
+      <div class="bcd blink">SCORING</div>\`;
   } else if (s.last) {
     const clusters = (s.last.clusters || []).map(c =>
       '<div class="bcluster"><span class="count">' + c.size + '</span><span>' + esc(c.label) + '</span></div>').join('');
@@ -1181,7 +1169,6 @@ function render(s) {
         <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
         \${leaderboardHtml(s)}
       </div>
-      <p class="muted" style="font-size:1.2em">Next question coming up…</p>
       \${joinHint}\`;
   } else {
     app.innerHTML = \`

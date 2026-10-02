@@ -22,7 +22,7 @@ export const BANNER = String.raw`
  * readable; opaque cards hide whatever sits under them. There are more face
  * images than spots, so each page load samples a random subset.
  */
-const FACE_COUNT = 38;
+const FACE_COUNT = 37;
 // Jittered 7x4 grid over the whole viewport; center spots sit behind the
 // opaque cards/panels, so they only peek out around the content.
 const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [

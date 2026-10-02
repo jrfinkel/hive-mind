@@ -5,7 +5,7 @@ import math
 import os
 import random
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
 # Face ids confirmed as Chris Manning from the contact sheets.
 # One id per source photo (duplicate detections of the same shot excluded).
@@ -56,7 +56,8 @@ def star_mask(size: int, rot_deg: float) -> Image.Image:
 
 def duotone(img: Image.Image, color: tuple) -> Image.Image:
     """Map grayscale to black→color, like a phosphor monitor."""
-    g = ImageOps.autocontrast(img.convert("L"), cutoff=2)
+    g = ImageOps.autocontrast(img.convert("L"), cutoff=4)
+    g = ImageEnhance.Contrast(g).enhance(1.4)
     return Image.merge(
         "RGB",
         [g.point([int(c * (i / 255) ** 1.1) for i in range(256)]) for c in color],

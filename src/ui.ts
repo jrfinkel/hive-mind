@@ -16,6 +16,35 @@ export const BANNER = String.raw`
 |_| |_|___|  \_/  |_____||_|  |_|___|_| \_|____/
 `.replace(/^\n/, "");
 
+/**
+ * Fixed background layer of star-cropped faces (public/faces/star*.png).
+ * Deterministic scatter, mostly hugging the viewport edges so the centered
+ * content column stays readable. Opaque cards hide whatever sits under them.
+ */
+const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [
+  ["left:-2%", "top:4%", 160],
+  ["right:-2%", "top:10%", 145],
+  ["left:3%", "top:34%", 125],
+  ["right:4%", "top:40%", 165],
+  ["left:-1%", "top:64%", 150],
+  ["right:1%", "top:70%", 135],
+  ["left:9%", "top:86%", 115],
+  ["right:11%", "top:88%", 150],
+  ["left:20%", "top:-3%", 120],
+  ["right:21%", "top:-2%", 130],
+  ["left:34%", "top:82%", 105],
+  ["right:36%", "top:3%", 95],
+  ["left:44%", "top:52%", 110],
+  ["right:44%", "top:28%", 100],
+];
+const FACE_LAYER =
+  `<div class="facestars" aria-hidden="true">` +
+  FACE_SPOTS.map(
+    ([pos, top, w], i) =>
+      `<img src="/faces/star${i}.png" alt="" style="${pos};${top};width:${w}px">`
+  ).join("") +
+  `</div>`;
+
 export function layout(o: {
   title: string;
   body: string;
@@ -41,6 +70,7 @@ export function layout(o: {
 <style>${CSS}</style>
 </head>
 <body>
+${FACE_LAYER}
 ${nav}
 <main id="content">${o.body}</main>
 ${o.script ? `<script>${o.script}</script>` : ""}
@@ -72,6 +102,10 @@ body::before {
   content: ""; position: fixed; inset: 0; z-index: 9999; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.22) 2px 4px);
 }
+/* Star-cropped face scatter behind everything */
+.facestars { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.facestars img { position: absolute; opacity: 0.15; }
+nav, main, .namebadge { position: relative; z-index: 1; }
 a { color: var(--ink); }
 nav {
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap;

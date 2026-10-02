@@ -18,6 +18,10 @@ migrations_dir = "migrations"
 [ai]
 binding = "AI"
 
+# --- Static assets: star-cropped guest-of-honor face PNGs for the background ---
+[assets]
+directory = "./public"
+
 [vars]
 # Passwords. Change + redeploy to rotate (signs everyone out of that area).
 ADMIN_PASSWORD = "lundard-boss"

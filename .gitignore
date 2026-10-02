@@ -1,3 +1,7 @@
 node_modules/
 .wrangler/
 .dev.vars
+# Face-pipeline working data (big; only the final public/faces/*.png ship)
+photos_raw/
+faces_hi/
+.venv/

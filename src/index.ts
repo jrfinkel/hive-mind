@@ -437,9 +437,12 @@ app.get("/admin/logout", (c) => {
   return c.redirect("/admin");
 });
 
-/** Everything under /admin/* (except login) and /api/admin/* requires the cookie. */
+/** Everything under /admin/* (except login) and /api/admin/* requires the cookie.
+ * Note: "/admin/*" also matches bare "/admin", which must pass through —
+ * its handler shows the login form itself (redirecting it here would loop). */
 app.use("/admin/*", async (c, next) => {
-  if (c.req.path === "/admin/login" || c.req.path === "/admin/logout") return next();
+  const open = ["/admin", "/admin/login", "/admin/logout"];
+  if (open.includes(c.req.path)) return next();
   if (!(await isAdmin(c))) return c.redirect("/admin");
   return next();
 });

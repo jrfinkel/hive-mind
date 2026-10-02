@@ -121,6 +121,35 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .pill.live { background: #2c3d24; color: var(--good); }
 .suggestion-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid #3a3322; }
 .suggestion-row .text { flex: 1 1 280px; }
+/* Big-screen board (/board) */
+.board { text-align: center; padding-top: 20px; }
+.board h1 { font-size: 2.2em; margin-bottom: 0.3em; }
+.board .bq {
+  font-size: 2.8em; font-weight: 800; line-height: 1.25; margin: 20px auto;
+  padding: 24px 30px; background: var(--panel2); border-radius: var(--radius);
+  border-left: 6px solid var(--honey); max-width: 1000px; text-align: left;
+}
+.board .bcd { font-size: 4.5em; font-weight: 800; color: var(--honey); font-variant-numeric: tabular-nums; }
+.board .bstats { display: flex; gap: 20px; justify-content: center; margin: 20px 0; }
+.board .bstats .stat { padding: 16px 34px; }
+.board .bstats .n { font-size: 2.6em; }
+.board .bstats .l { font-size: 1em; }
+.board .bjoin { color: var(--muted); font-size: 1.25em; margin-top: 34px; }
+.board .bjoin strong { color: var(--honey); }
+.board .bcols { display: flex; gap: 20px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+.board .bpanel {
+  background: var(--panel); border: 1px solid #3a3322; border-radius: var(--radius);
+  padding: 16px 24px; flex: 1 1 380px; max-width: 540px; text-align: left;
+}
+.board .bpanel h2 { margin-top: 0; color: var(--honey); }
+.board .bcluster { display: flex; gap: 14px; align-items: center; font-size: 1.5em; padding: 7px 0; }
+.board .bcluster .count {
+  min-width: 2em; text-align: center; background: var(--honey); color: #241a00;
+  border-radius: 8px; font-weight: 800; padding: 2px 6px; font-size: 0.9em;
+}
+.board .btable { font-size: 1.3em; }
+.board .btable td { border-bottom: 1px solid #3a3322; padding: 6px 10px; }
+
 .qcompose { display: flex; gap: 8px; align-items: center; }
 .qcompose .qword { font-weight: 800; color: var(--honey); font-size: 1.1em; }
 .qcompose .qnum { width: 74px; flex: none; }

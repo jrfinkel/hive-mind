@@ -33,13 +33,20 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
     clusters = sanitize(clusters, answers);
   }
 
+  // A cluster's size (and the points it awards) counts DISTINCT players, so a
+  // player whose multiple answers get over-merged can't score off themselves.
+  const playerOf = new Map(answers.map((a) => [a.id, a.player_id]));
+  const sizeOf = (cl: ClusterDraft) =>
+    new Set(cl.ids.map((id) => playerOf.get(id))).size;
+  clusters.sort((x, y) => sizeOf(y) - sizeOf(x));
+
   // Persist: clusters, then per-answer cluster assignment + points.
   const stmts: D1PreparedStatement[] = [];
   for (const cl of clusters) {
     stmts.push(
       env.DB.prepare(
         "INSERT INTO clusters (round_id, label, size) VALUES (?, ?, ?)"
-      ).bind(roundId, cl.label, cl.ids.length)
+      ).bind(roundId, cl.label, sizeOf(cl))
     );
   }
   if (stmts.length) await env.DB.batch(stmts);
@@ -57,7 +64,7 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
       updates.push(
         env.DB.prepare(
           "UPDATE answers SET cluster_id = ?, points = ? WHERE id = ?"
-        ).bind(clusterId, cl.ids.length, answerId)
+        ).bind(clusterId, sizeOf(cl), answerId)
       );
     }
   });
@@ -81,11 +88,15 @@ async function clusterWithAI(
         role: "system",
         content:
           "You group answers for a party game where players try to give the same answer as each other. " +
-          "Group answers that mean the same thing, even if spelled, phrased, or capitalized differently " +
-          '(e.g. "NYC", "new york", and "New York City" are one group; "dog" and "dogs" are one group). ' +
-          "Do NOT merge answers that are merely similar or in the same category. " +
-          "Every answer id must appear in exactly one group. " +
-          'Reply with ONLY valid JSON: {"clusters":[{"label":"short canonical label","ids":[1,2]}]}',
+          "Group two answers ONLY if they refer to the exact same thing — the same person, place, object, or concept. " +
+          "Different spellings, capitalization, abbreviations, plurals, typos, or alternate names of the SAME thing " +
+          'belong together (e.g. "NYC" / "new york" / "New York City"; "dog" / "dogs"; "Geoff Hinton" / "hinton"). ' +
+          "NEVER group answers just because they belong to the same category: for “name a farm animal”, " +
+          '"cow" and "chicken" are both farm animals but are DIFFERENT answers and must be in separate groups. ' +
+          "When unsure, keep answers separate. " +
+          "Label each group with the most common phrasing among its answers — never a category name. " +
+          "Every answer id must appear in exactly one group; an answer with no match is its own group of one. " +
+          'Reply with ONLY valid JSON: {"clusters":[{"label":"most common phrasing","ids":[1,2]}]}',
       },
       {
         role: "user",

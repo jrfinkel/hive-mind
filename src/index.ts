@@ -78,7 +78,7 @@ async function maybeAutoClose(c: C, round: Round | null): Promise<Round | null> 
     )
       .bind(t - ACTIVE_WINDOW, round.id)
       .first<{ active: number; answered_active: number }>();
-    if (stats && stats.active >= 2 && stats.answered_active >= stats.active) {
+    if (stats && stats.active >= 1 && stats.answered_active >= stats.active) {
       shouldClose = true;
     }
   }
@@ -152,9 +152,8 @@ ${ok ? `<div class="flash ok">Thanks! Your question is in the queue.</div>` : ""
     <input type="text" name="thing" required maxlength="280" class="qthing"
       placeholder="important NLP researchers">
   </div>
-  <label>Your name <span class="muted small">(optional)</span></label>
-  <input type="text" name="author" maxlength="60">
   <div class="btn-row"><button class="btn" type="submit">Submit question</button></div>
+  <p class="muted small">Suggestions are anonymous.</p>
 </form>`,
     })
   );
@@ -164,12 +163,11 @@ app.post("/suggest", async (c) => {
   const form = await c.req.formData();
   const thing = String(form.get("thing") ?? "").trim().slice(0, 280);
   const num = Math.max(1, Math.min(10, Number(form.get("num") ?? 1) || 1));
-  const author = String(form.get("author") ?? "").trim().slice(0, 60) || null;
   if (thing) {
     await c.env.DB.prepare(
-      "INSERT INTO suggestions (text, num, author, created_at) VALUES (?, ?, ?, ?)"
+      "INSERT INTO suggestions (text, num, created_at) VALUES (?, ?, ?)"
     )
-      .bind(thing, num, author, now())
+      .bind(thing, num, now())
       .run();
   }
   return c.redirect("/suggest?ok=1");
@@ -181,6 +179,19 @@ app.post("/suggest", async (c) => {
 
 app.get("/play", (c) =>
   c.html(layout({ title: "Play", body: `<div id="app"><p class="muted">Loading…</p></div>`, script: PLAY_JS }))
+);
+
+// Big-screen display: current question + live stats while a round runs,
+// results + leaderboard between rounds. Put this on the projector.
+app.get("/board", (c) =>
+  c.html(
+    layout({
+      title: "Big screen",
+      nav: false,
+      body: `<style>main{max-width:1150px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
+      script: BOARD_JS,
+    })
+  )
 );
 
 app.post("/api/join", async (c) => {
@@ -216,18 +227,23 @@ app.post("/api/answer", async (c) => {
   if (new Set(normed).size !== normed.length) {
     return c.json({ error: "Your answers must all be different." }, 400);
   }
+  // Answers are final — no edits once locked in.
+  const existing = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM answers WHERE round_id = ? AND player_id = ?"
+  )
+    .bind(round.id, body.player_id)
+    .first<{ n: number }>();
+  if ((existing?.n ?? 0) > 0) {
+    return c.json({ error: "You already locked in your answers." }, 409);
+  }
   const t = now();
-  await c.env.DB.batch([
-    c.env.DB.prepare("DELETE FROM answers WHERE round_id = ? AND player_id = ?").bind(
-      round.id,
-      body.player_id
-    ),
-    ...texts.map((text, idx) =>
+  await c.env.DB.batch(
+    texts.map((text, idx) =>
       c.env.DB.prepare(
         "INSERT INTO answers (round_id, player_id, idx, text, created_at) VALUES (?, ?, ?, ?, ?)"
       ).bind(round.id, body.player_id, idx, text, t)
-    ),
-  ]);
+    )
+  );
   return c.json({ ok: true });
 });
 
@@ -244,6 +260,13 @@ app.get("/api/state", async (c) => {
   round = await maybeAutoClose(c, round);
 
   const out: Record<string, unknown> = { status: "idle", server_time: t };
+
+  const active = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM players WHERE last_seen >= ?"
+  )
+    .bind(t - ACTIVE_WINDOW)
+    .first<{ n: number }>();
+  out.active_count = active?.n ?? 0;
 
   if (round) {
     const count = await c.env.DB.prepare(
@@ -304,7 +327,7 @@ app.get("/api/state", async (c) => {
     `SELECT p.name, SUM(a.points) AS pts FROM answers a
      JOIN players p ON p.id = a.player_id
      JOIN rounds r ON r.id = a.round_id AND r.status = 'scored'
-     GROUP BY p.id ORDER BY pts DESC LIMIT 5`
+     GROUP BY p.id ORDER BY pts DESC LIMIT 10`
   ).all<{ name: string; pts: number }>();
   out.leaderboard = top;
 
@@ -532,6 +555,7 @@ app.get("/admin", async (c) => {
     .join("");
 
   const body = `<h1>Admin</h1>
+<p><a href="/board" target="_blank" style="color:var(--honey)">Open the big-screen board ↗</a> <span class="muted small">— put it on the projector</span></p>
 ${roundCard}
 <h2>Open a question</h2>
 <div class="card">
@@ -706,7 +730,7 @@ const PLAY_JS = `
 const LS = 'hiveMindPlayer';
 let player = null;
 try { player = JSON.parse(localStorage.getItem(LS) || 'null'); } catch {}
-let state = null, viewKey = '', editing = false, countdownTimer = null;
+let state = null, viewKey = '', countdownTimer = null;
 const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -770,13 +794,13 @@ function startCountdown(closesAt) {
 
 function render() {
   const s = state;
-  const key = [s.status, s.round && s.round.id, s.answered, s.last && s.last.id, editing].join(':');
+  const key = [s.status, s.round && s.round.id, s.answered, s.last && s.last.id].join(':');
   const countEl = document.getElementById('liveCount');
   if (countEl && s.answer_count != null) countEl.textContent = s.answer_count;
   if (key === viewKey) return;
   viewKey = key;
 
-  if (s.status === 'open' && (!s.answered || editing)) {
+  if (s.status === 'open' && !s.answered) {
     const n = s.round.num || 1;
     const prev = s.your_answers || [];
     const inputs = Array.from({ length: n }, (_, i) =>
@@ -790,7 +814,8 @@ function render() {
         <label>Your answer\${n > 1 ? 's' : ''} <span class="muted small">— what will most people say?</span></label>
         \${inputs}
         <div id="formErr"></div>
-        <div class="btn-row"><button class="btn">\${s.answered ? 'Update answers' : 'Lock it in'}</button></div>
+        <div class="btn-row"><button class="btn">Lock it in</button></div>
+        <p class="muted small" style="margin-bottom:0">Careful — answers are final once locked in!</p>
       </form>
       <p class="muted small"><span id="liveCount">\${s.answer_count}</span> player(s) answered so far</p>\`;
     startCountdown(s.round.closes_at);
@@ -803,7 +828,7 @@ function render() {
       if (new Set(normed).size !== normed.length) { errEl.innerHTML = '<div class="flash err">Your answers must all be different.</div>'; return; }
       const r = await fetch('/api/answer', { method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ player_id: player.player_id, round_id: s.round.id, texts }) });
-      if (r.ok) { editing = false; viewKey = ''; poll(); }
+      if (r.ok) { viewKey = ''; poll(); }
       else { const j = await r.json().catch(() => ({})); errEl.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>'; }
     };
   } else if (s.status === 'open' && s.answered) {
@@ -813,10 +838,8 @@ function render() {
       <div class="card center">
         <p class="big">✅ Locked in: \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
         <p class="muted"><span id="liveCount">\${s.answer_count}</span> player(s) answered. Waiting for the round to close…</p>
-        <button class="btn secondary" id="editBtn">Change my answers</button>
       </div>\`;
     startCountdown(s.round.closes_at);
-    document.getElementById('editBtn').onclick = () => { editing = true; viewKey = ''; render(); };
   } else if (s.status === 'scoring') {
     app.innerHTML = \`
       <div class="question">\${esc(s.round.question)}</div>
@@ -839,6 +862,96 @@ async function poll() {
 }
 poll();
 setInterval(poll, 2500);
+`;
+
+// ---------------------------------------------------------------------------
+// Big-screen board client script
+// ---------------------------------------------------------------------------
+
+const BOARD_JS = `
+const app = document.getElementById('app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let viewKey = '', countdownTimer = null;
+const joinHint = '<p class="bjoin">📱 Play at <strong>' + location.host + '/play</strong> · suggest questions at <strong>' + location.host + '/suggest</strong></p>';
+
+function startCountdown(closesAt) {
+  clearInterval(countdownTimer);
+  if (!closesAt) return;
+  const tick = () => {
+    const el = document.getElementById('bcd');
+    if (!el) return clearInterval(countdownTimer);
+    const left = Math.max(0, closesAt - Math.floor(Date.now() / 1000));
+    el.textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+  };
+  tick();
+  countdownTimer = setInterval(tick, 500);
+}
+
+function leaderboardHtml(s) {
+  if (!(s.leaderboard || []).length) return '';
+  return '<div class="bpanel"><h2>🏆 Leaderboard</h2><table class="btable">' +
+    s.leaderboard.map((r, i) =>
+      '<tr><td>' + (['🥇','🥈','🥉'][i] ?? (i + 1)) + '</td><td>' + esc(r.name) + '</td><td><strong>' + r.pts + '</strong></td></tr>').join('') +
+    '</table></div>';
+}
+
+function render(s) {
+  const key = [s.status, s.round && s.round.id, s.last && s.last.id].join(':');
+  const aEl = document.getElementById('bAnswered');
+  if (aEl) aEl.textContent = s.answer_count;
+  const pEl = document.getElementById('bActive');
+  if (pEl) pEl.textContent = s.active_count;
+  if (key === viewKey) return;
+  viewKey = key;
+
+  if (s.status === 'open') {
+    app.innerHTML = \`
+      <h1>🐝 Hive Mind</h1>
+      <div class="bq">\${esc(s.round.question)}</div>
+      \${s.round.closes_at ? '<div class="bcd" id="bcd"></div>' : ''}
+      <div class="bstats">
+        <div class="stat"><div class="n" id="bAnswered">\${s.answer_count}</div><div class="l">answered</div></div>
+        <div class="stat"><div class="n" id="bActive">\${s.active_count}</div><div class="l">playing</div></div>
+      </div>
+      \${joinHint}\`;
+    startCountdown(s.round.closes_at);
+  } else if (s.status === 'scoring') {
+    app.innerHTML = \`
+      <h1>🐝 Hive Mind</h1>
+      <div class="bq">\${esc(s.round.question)}</div>
+      <div class="bcd">🧮</div>
+      <p class="muted" style="font-size:1.4em">Scoring — the hive is comparing answers…</p>\`;
+  } else if (s.last) {
+    const clusters = (s.last.clusters || []).map(c =>
+      '<div class="bcluster"><span class="count">' + c.size + '</span><span>' + esc(c.label) + '</span></div>').join('');
+    app.innerHTML = \`
+      <h1>🐝 Hive Mind</h1>
+      <div class="bq">\${esc(s.last.question)}</div>
+      <div class="bcols">
+        <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
+        \${leaderboardHtml(s)}
+      </div>
+      <p class="muted" style="font-size:1.2em">Next question coming up…</p>
+      \${joinHint}\`;
+  } else {
+    app.innerHTML = \`
+      <h1>🐝 Hive Mind</h1>
+      <div class="bq">Get ready…</div>
+      <div class="bstats">
+        <div class="stat"><div class="n" id="bActive">\${s.active_count}</div><div class="l">players joined</div></div>
+      </div>
+      \${joinHint}\`;
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state');
+    if (r.ok) render(await r.json());
+  } catch {}
+}
+poll();
+setInterval(poll, 2000);
 `;
 
 export default app;

@@ -1127,7 +1127,7 @@ function renderForm() {
     <div class="qcompose">
       <span class="qword">Name</span>
       <input type="number" id="sugNum" value="1" min="1" max="10" required class="qnum">
-      <input type="text" id="sugThing" required maxlength="280" class="qthing" placeholder="important NLP researchers">
+      <input type="text" id="sugThing" required maxlength="280" class="qthing" placeholder="NLP researchers">
     </div>
     <div class="btn-row"><button class="btn">Submit question</button></div>
   </form>\`;

@@ -9,9 +9,13 @@ const app = new Hono<{ Bindings: Env }>();
 type C = Context<{ Bindings: Env }>;
 
 /** Players count as "active" if they polled within this many seconds. */
-const ACTIVE_WINDOW = 45;
+const ACTIVE_WINDOW = 60;
 /** Don't auto-close on "everyone answered" until the round is this old. */
 const MIN_ROUND_AGE = 20;
+/** Only write last_seen if it's at least this stale (cuts D1 writes ~10x). */
+const LAST_SEEN_REFRESH = 25;
+/** How long the shared (non-per-player) state is served from memory. */
+const SHARED_TTL_MS = 2000;
 
 // ---------------------------------------------------------------------------
 // Admin auth: single password → signed-ish cookie (hash of the password).
@@ -81,12 +85,6 @@ async function currentRound(env: Env): Promise<Round | null> {
   ).first<Round>();
 }
 
-async function lastScoredRound(env: Env): Promise<Round | null> {
-  return env.DB.prepare(
-    "SELECT * FROM rounds WHERE status = 'scored' ORDER BY id DESC LIMIT 1"
-  ).first<Round>();
-}
-
 /** Atomically claim an open round for scoring; returns true for the winner. */
 async function claimForScoring(env: Env, roundId: number): Promise<boolean> {
   const res = await env.DB.prepare(
@@ -130,6 +128,65 @@ async function maybeAutoClose(c: C, round: Round | null): Promise<Round | null> 
     return { ...round, status: "scoring" };
   }
   return round;
+}
+
+// ---------------------------------------------------------------------------
+// Shared game state, cached in isolate memory. With 150 players polling every
+// 2.5s this turns ~60 identical computations/sec into ~0.5/sec; the per-player
+// bits stay fresh on every request. Staleness ≤2s is invisible at poll rate.
+// ---------------------------------------------------------------------------
+
+let sharedCache: { at: number; data: Record<string, unknown> } | null = null;
+
+async function computeSharedState(c: C): Promise<Record<string, unknown>> {
+  const t = now();
+  let round = await currentRound(c.env);
+  round = await maybeAutoClose(c, round);
+
+  const out: Record<string, unknown> = { status: "idle" };
+
+  const active = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM players WHERE last_seen >= ?"
+  )
+    .bind(t - ACTIVE_WINDOW)
+    .first<{ n: number }>();
+  out.active_count = active?.n ?? 0;
+
+  if (round) {
+    const count = await c.env.DB.prepare(
+      "SELECT COUNT(DISTINCT player_id) AS n FROM answers WHERE round_id = ?"
+    )
+      .bind(round.id)
+      .first<{ n: number }>();
+    out.status = round.status; // open | scoring
+    out.round = {
+      id: round.id,
+      question: round.question,
+      num: round.num,
+      closes_at: round.closes_at,
+    };
+    out.answer_count = count?.n ?? 0;
+  }
+
+  // Precomputed at scoring time (see scoring.ts writeMeta).
+  const { results: meta } = await c.env.DB.prepare(
+    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard')"
+  ).all<{ k: string; v: string }>();
+  for (const m of meta) {
+    if (m.k === "last_results") out.last = JSON.parse(m.v);
+    if (m.k === "leaderboard") out.leaderboard = JSON.parse(m.v);
+  }
+  out.leaderboard ??= [];
+
+  const { results: sugs } = await c.env.DB.prepare(
+    `SELECT s.id, s.text, s.num, COALESCE(SUM(v.vote), 0) AS score
+     FROM suggestions s LEFT JOIN suggestion_votes v ON v.suggestion_id = s.id
+     WHERE s.status = 'pending'
+     GROUP BY s.id ORDER BY score DESC, s.id LIMIT 30`
+  ).all<{ id: number; text: string; num: number; score: number }>();
+  out.suggestions = sugs.map((g) => ({ ...g, your_vote: 0 }));
+
+  return out;
 }
 
 type ClusterRow = { id: number; label: string; size: number };
@@ -337,44 +394,41 @@ app.post("/api/answer", async (c) => {
 app.get("/api/state", async (c) => {
   const playerId = c.req.query("player") ?? "";
   const t = now();
+
+  // --- per-player: identity check + throttled last_seen write -------------
   let unknownPlayer = false;
   if (playerId) {
-    const res = await c.env.DB.prepare("UPDATE players SET last_seen = ? WHERE id = ?")
-      .bind(t, playerId)
-      .run();
-    // Player id not in the DB (e.g. after a full reset) → client must re-join.
-    unknownPlayer = (res.meta.changes ?? 0) === 0;
+    const p = await c.env.DB.prepare("SELECT last_seen FROM players WHERE id = ?")
+      .bind(playerId)
+      .first<{ last_seen: number }>();
+    if (!p) {
+      // Player id not in the DB (e.g. after a full reset) → client must re-join.
+      unknownPlayer = true;
+    } else if (t - p.last_seen >= LAST_SEEN_REFRESH) {
+      await c.env.DB.prepare("UPDATE players SET last_seen = ? WHERE id = ?")
+        .bind(t, playerId)
+        .run();
+    }
   }
 
-  let round = await currentRound(c.env);
-  round = await maybeAutoClose(c, round);
-
-  const out: Record<string, unknown> = { status: "idle", server_time: t };
+  // --- shared state: identical for every player, cached per isolate -------
+  if (!sharedCache || Date.now() - sharedCache.at > SHARED_TTL_MS) {
+    sharedCache = { at: Date.now(), data: await computeSharedState(c) };
+  }
+  const shared = sharedCache.data;
+  const out: Record<string, unknown> = { ...shared, server_time: t };
   if (unknownPlayer) out.unknown_player = true;
-
-  const active = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM players WHERE last_seen >= ?"
-  )
-    .bind(t - ACTIVE_WINDOW)
-    .first<{ n: number }>();
-  out.active_count = active?.n ?? 0;
-
+  const round = shared.round as { id: number; closes_at: number | null } | undefined;
   if (round) {
-    const count = await c.env.DB.prepare(
-      "SELECT COUNT(DISTINCT player_id) AS n FROM answers WHERE round_id = ?"
-    )
-      .bind(round.id)
-      .first<{ n: number }>();
-    out.status = round.status; // open | scoring
     out.round = {
-      id: round.id,
-      question: round.question,
-      num: round.num,
-      closes_at: round.closes_at,
+      ...round,
       seconds_left: round.closes_at ? Math.max(0, round.closes_at - t) : null,
     };
-    out.answer_count = count?.n ?? 0;
-    if (playerId) {
+  }
+
+  // --- per-player additions (small indexed lookups) ------------------------
+  if (playerId && !unknownPlayer) {
+    if (round) {
       const { results: mine } = await c.env.DB.prepare(
         "SELECT text FROM answers WHERE round_id = ? AND player_id = ? ORDER BY idx"
       )
@@ -383,19 +437,8 @@ app.get("/api/state", async (c) => {
       out.answered = mine.length > 0;
       out.your_answers = mine.map((m) => m.text);
     }
-  }
-
-  // Latest finished round (shown between rounds, and under "scoring…").
-  const last = await lastScoredRound(c.env);
-  if (last) {
-    const clusters = await roundClusters(c.env, last.id);
-    const lastOut: Record<string, unknown> = {
-      id: last.id,
-      question: last.question,
-      total_answers: clusters.reduce((s, cl) => s + cl.size, 0),
-      clusters: clusters.slice(0, 10).map((cl) => ({ label: cl.label, size: cl.size })),
-    };
-    if (playerId) {
+    const last = shared.last as { id: number } | undefined;
+    if (last) {
       const { results: mine } = await c.env.DB.prepare(
         `SELECT a.text, a.points, cl.label AS cluster_label
          FROM answers a LEFT JOIN clusters cl ON cl.id = a.cluster_id
@@ -404,37 +447,22 @@ app.get("/api/state", async (c) => {
         .bind(last.id, playerId)
         .all<{ text: string; points: number; cluster_label: string | null }>();
       if (mine.length) {
-        lastOut.your = {
-          answers: mine,
-          total: mine.reduce((s, m) => s + m.points, 0),
+        out.last = {
+          ...last,
+          your: { answers: mine, total: mine.reduce((s, m) => s + m.points, 0) },
         };
       }
     }
-    out.last = lastOut;
-  }
-
-  // Mini leaderboard for the between-rounds screen.
-  const { results: top } = await c.env.DB.prepare(
-    `SELECT p.name, SUM(a.points) AS pts FROM answers a
-     JOIN players p ON p.id = a.player_id
-     JOIN rounds r ON r.id = a.round_id AND r.status = 'scored'
-     GROUP BY p.id ORDER BY pts DESC LIMIT 10`
-  ).all<{ name: string; pts: number }>();
-  out.leaderboard = top;
-
-  // Pending suggestions for players to vote on while waiting.
-  if (playerId) {
-    const { results: sugs } = await c.env.DB.prepare(
-      `SELECT s.id, s.text, s.num,
-         COALESCE(SUM(v.vote), 0) AS score,
-         COALESCE((SELECT vote FROM suggestion_votes WHERE suggestion_id = s.id AND player_id = ?1), 0) AS your_vote
-       FROM suggestions s LEFT JOIN suggestion_votes v ON v.suggestion_id = s.id
-       WHERE s.status = 'pending'
-       GROUP BY s.id ORDER BY score DESC, s.id LIMIT 30`
+    const { results: votes } = await c.env.DB.prepare(
+      "SELECT suggestion_id, vote FROM suggestion_votes WHERE player_id = ?"
     )
       .bind(playerId)
-      .all<{ id: number; text: string; num: number; score: number; your_vote: number }>();
-    out.suggestions = sugs;
+      .all<{ suggestion_id: number; vote: number }>();
+    const voteMap = new Map(votes.map((v) => [v.suggestion_id, v.vote]));
+    out.suggestions = ((shared.suggestions as { id: number }[]) ?? []).map((g) => ({
+      ...g,
+      your_vote: voteMap.get(g.id) ?? 0,
+    }));
   }
 
   return c.json(out);
@@ -446,7 +474,7 @@ app.get("/api/state", async (c) => {
 
 app.get("/results", async (c) => {
   const { results: rounds } = await c.env.DB.prepare(
-    "SELECT * FROM rounds WHERE status = 'scored' ORDER BY id DESC LIMIT 20"
+    "SELECT * FROM rounds WHERE status = 'scored' ORDER BY id DESC LIMIT 10"
   ).all<Round>();
 
   let body = `<h1>Results</h1>`;
@@ -499,7 +527,7 @@ app.get("/results", async (c) => {
           const fresh = doc.getElementById("content");
           if (fresh) document.getElementById("content").innerHTML = fresh.innerHTML;
         } catch {}
-      }, 5000);`,
+      }, 10000);`,
     })
   );
 });
@@ -539,7 +567,7 @@ ${
           const fresh = doc.getElementById("content");
           if (fresh) document.getElementById("content").innerHTML = fresh.innerHTML;
         } catch {}
-      }, 5000);`,
+      }, 10000);`,
     })
   );
 });
@@ -808,6 +836,7 @@ app.post("/admin/open", async (c) => {
   )
     .bind(composeQuestion(num, thing), num, suggestionId, t, minutes > 0 ? t + minutes * 60 : null)
     .run();
+  sharedCache = null;
   return c.redirect("/admin");
 });
 
@@ -816,6 +845,7 @@ app.post("/admin/close", async (c) => {
   if (round && round.status === "open" && (await claimForScoring(c.env, round.id))) {
     startScoring(c, round.id);
   }
+  sharedCache = null;
   return c.redirect("/admin");
 });
 
@@ -855,7 +885,9 @@ app.post("/admin/reset", async (c) => {
     c.env.DB.prepare("DELETE FROM suggestion_votes"),
     c.env.DB.prepare("DELETE FROM suggestions"),
     c.env.DB.prepare("DELETE FROM players"),
+    c.env.DB.prepare("DELETE FROM meta"),
   ]);
+  sharedCache = null;
   return c.redirect("/admin");
 });
 

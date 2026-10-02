@@ -25,7 +25,17 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
   let clusters: ClusterDraft[] = [];
   if (answers.length > 0) {
     try {
-      clusters = await clusterWithAI(env, round?.question ?? "", answers);
+      // Pre-group exact duplicates so the model only sees unique answers —
+      // with 150 players most answers repeat, so this keeps the prompt and
+      // the response small no matter the crowd size.
+      const { reps, expand } = dedupe(answers);
+      const repClusters = await clusterWithAI(env, round?.question ?? "", reps);
+      clusters = repClusters.map((cl) => ({
+        label: cl.label,
+        ids: (Array.isArray(cl.ids) ? cl.ids : []).flatMap(
+          (id) => expand.get(Number(id)) ?? [Number(id)]
+        ),
+      }));
     } catch (err) {
       console.error("AI clustering failed, using exact-match fallback", err);
       clusters = clusterExact(answers);
@@ -74,6 +84,85 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
     ).bind(now(), roundId)
   );
   await env.DB.batch(updates);
+
+  await writeMeta(env, roundId);
+}
+
+/**
+ * Precompute the payloads that every player poll displays (last round results
+ * + leaderboard) so /api/state never aggregates over the answers table.
+ */
+async function writeMeta(env: Env, roundId: number): Promise<void> {
+  const stmts: D1PreparedStatement[] = [];
+
+  // Leaderboard always reflects all scored rounds.
+  const { results: top } = await env.DB.prepare(
+    `SELECT p.name, SUM(a.points) AS pts FROM answers a
+     JOIN players p ON p.id = a.player_id
+     JOIN rounds r ON r.id = a.round_id AND r.status = 'scored'
+     GROUP BY p.id ORDER BY pts DESC LIMIT 10`
+  ).all<{ name: string; pts: number }>();
+  stmts.push(
+    env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('leaderboard', ?)").bind(
+      JSON.stringify(top)
+    )
+  );
+
+  // "Last results" only if this is the newest scored round (a rescore of an
+  // older round must not hijack the between-rounds screen).
+  const latest = await env.DB.prepare(
+    "SELECT MAX(id) AS id FROM rounds WHERE status = 'scored'"
+  ).first<{ id: number }>();
+  if (latest?.id === roundId) {
+    const round = await env.DB.prepare("SELECT question FROM rounds WHERE id = ?")
+      .bind(roundId)
+      .first<{ question: string }>();
+    const { results: cls } = await env.DB.prepare(
+      "SELECT label, size FROM clusters WHERE round_id = ? ORDER BY size DESC, id LIMIT 10"
+    )
+      .bind(roundId)
+      .all<{ label: string; size: number }>();
+    const total = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM answers WHERE round_id = ?"
+    )
+      .bind(roundId)
+      .first<{ n: number }>();
+    stmts.push(
+      env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('last_results', ?)").bind(
+        JSON.stringify({
+          id: roundId,
+          question: round?.question ?? "",
+          total_answers: total?.n ?? 0,
+          clusters: cls,
+        })
+      )
+    );
+  }
+  await env.DB.batch(stmts);
+}
+
+/** Group answers whose normalized text matches exactly; return one
+ * representative per group plus a map to expand back to all ids. */
+function dedupe(answers: Answer[]): { reps: Answer[]; expand: Map<number, number[]> } {
+  const norm = (s: string) =>
+    s.toLowerCase().trim().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ");
+  const groups = new Map<string, Answer[]>();
+  for (const a of answers) {
+    const key = norm(a.text) || a.text;
+    const g = groups.get(key);
+    if (g) g.push(a);
+    else groups.set(key, [a]);
+  }
+  const reps: Answer[] = [];
+  const expand = new Map<number, number[]>();
+  for (const group of groups.values()) {
+    reps.push(group[0]);
+    expand.set(
+      group[0].id,
+      group.map((a) => a.id)
+    );
+  }
+  return { reps, expand };
 }
 
 async function clusterWithAI(
@@ -103,7 +192,7 @@ async function clusterWithAI(
         content: `Question: ${question}\n\nAnswers (id: text):\n${list}`,
       },
     ],
-    max_tokens: 2048,
+    max_tokens: 4096,
     temperature: 0.1,
     response_format: {
       type: "json_schema",

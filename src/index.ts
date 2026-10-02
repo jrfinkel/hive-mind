@@ -1188,8 +1188,18 @@ function leaderboardHtml(s) {
     '</table></div>';
 }
 
+function suggestionsHtml(s) {
+  const sugs = (s.suggestions || []).slice(0, 5);
+  if (!sugs.length) return '';
+  return '<div class="bpanel"><h2>Top suggestions</h2>' +
+    sugs.map(g =>
+      '<div class="bcluster"><span class="count">' + g.score + '</span><span>Name ' + g.num + ' ' + esc(g.text) + '</span></div>').join('') +
+    '</div>';
+}
+
 function render(s) {
-  const key = [s.status, s.round && s.round.id, s.last && s.last.id].join(':');
+  const sugKey = (s.suggestions || []).slice(0, 5).map(g => g.id + '.' + g.score).join(',');
+  const key = [s.status, s.round && s.round.id, s.last && s.last.id, sugKey].join(':');
   const aEl = document.getElementById('bAnswered');
   if (aEl) aEl.textContent = s.answer_count;
   const pEl = document.getElementById('bActive');
@@ -1222,6 +1232,7 @@ function render(s) {
       <div class="bcols">
         <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
         \${leaderboardHtml(s)}
+        \${suggestionsHtml(s)}
       </div>
       \${joinHint}\`;
   } else {
@@ -1231,6 +1242,7 @@ function render(s) {
       <div class="bstats">
         <div class="stat"><div class="n" id="bActive">\${s.active_count}</div><div class="l">players joined</div></div>
       </div>
+      \${s.suggestions && s.suggestions.length ? '<div class="bcols">' + suggestionsHtml(s) + '</div>' : ''}
       \${joinHint}\`;
   }
 }

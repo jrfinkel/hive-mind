@@ -207,6 +207,17 @@ app.post("/api/join", async (c) => {
   return c.json({ player_id: id, name: clean });
 });
 
+app.post("/api/rename", async (c) => {
+  const { player_id, name } = await c.req.json<{ player_id?: string; name?: string }>();
+  const clean = String(name ?? "").trim().slice(0, 40);
+  if (!player_id || !clean) return c.json({ error: "name required" }, 400);
+  const res = await c.env.DB.prepare("UPDATE players SET name = ? WHERE id = ?")
+    .bind(clean, player_id)
+    .run();
+  if ((res.meta.changes ?? 0) === 0) return c.json({ error: "unknown player" }, 404);
+  return c.json({ ok: true, name: clean });
+});
+
 app.post("/api/answer", async (c) => {
   const body = await c.req.json<{ player_id?: string; round_id?: number; texts?: string[] }>();
   const texts = (Array.isArray(body.texts) ? body.texts : [])
@@ -848,8 +859,23 @@ function render() {
   } else {
     app.innerHTML = \`
       <div class="card center"><p class="big">⏳ Waiting for the next question…</p>
-      <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p></div>
+      <p class="muted">Hi \${esc(player.name)} — stay on this page, the question appears automatically.</p>
+      <p class="small"><a href="#" id="renameBtn" style="color:var(--muted)">Change my name</a></p></div>
       \${lastResultsHtml(s)}\`;
+    document.getElementById('renameBtn').onclick = async (e) => {
+      e.preventDefault();
+      const name = (window.prompt('New name (your points come with you):', player.name) || '').trim();
+      if (!name || name === player.name) return;
+      const r = await fetch('/api/rename', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ player_id: player.player_id, name }) });
+      if (r.ok) {
+        const j = await r.json();
+        player.name = j.name;
+        localStorage.setItem(LS, JSON.stringify(player));
+        viewKey = '';
+        poll();
+      }
+    };
   }
 }
 

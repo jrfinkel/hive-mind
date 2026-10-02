@@ -261,7 +261,7 @@ app.get("/play", (c) =>
 // results + leaderboard between rounds. Put this on the projector.
 app.get("/board", (c) => {
   const origin = new URL(c.req.url).origin;
-  const playUrl = `${origin}/play?pw=${encodeURIComponent(c.env.PLAYER_PASSWORD)}`;
+  const playUrl = `${origin}/play`;
   return c.html(
     layout({
       title: "Big screen",

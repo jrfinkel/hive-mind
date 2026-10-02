@@ -9,8 +9,9 @@ from PIL import Image, ImageDraw, ImageOps
 
 # Face ids confirmed as Chris Manning from the contact sheets.
 # One id per source photo (duplicate detections of the same shot excluded).
+# (10, 17 dropped: double-exposure ghosting; 78 dropped: not Chris)
 CHRIS = [
-    4, 10, 17, 20, 31, 50, 78, 99, 101, 111, 114, 120, 128, 139,
+    4, 20, 31, 50, 99, 101, 111, 114, 120, 128, 139,
     160, 168, 170, 175, 192, 211, 216, 218, 223, 229, 231, 233, 238,
     250, 252, 260, 269, 279, 288, 295, 303, 308, 316, 321, 330, 333, 338,
 ]

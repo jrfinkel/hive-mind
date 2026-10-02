@@ -22,7 +22,7 @@ export const BANNER = String.raw`
  * readable; opaque cards hide whatever sits under them. There are more face
  * images than spots, so each page load samples a random subset.
  */
-const FACE_COUNT = 41;
+const FACE_COUNT = 38;
 const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [
   ["left:-2%", "top:4%", 160],
   ["right:-2%", "top:10%", 145],

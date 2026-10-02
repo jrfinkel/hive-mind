@@ -75,18 +75,7 @@ export function layout(o: {
   title: string;
   body: string;
   script?: string;
-  nav?: boolean;
 }): string {
-  const nav =
-    o.nav === false
-      ? ""
-      : `<nav>
-      <a href="/" class="brand">:: HIVE MIND ::</a>
-      <a href="/play">Play</a>
-      <a href="/results">Results</a>
-      <a href="/leaderboard">Scores</a>
-      <a href="/suggest">Suggest</a>
-    </nav>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -97,7 +86,6 @@ export function layout(o: {
 </head>
 <body>
 ${faceLayer()}
-${nav}
 <main id="content">${o.body}</main>
 ${o.script ? `<script>${o.script}</script>` : ""}
 </body>
@@ -131,18 +119,8 @@ body::before {
 /* Star-cropped face scatter behind everything */
 .facestars { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
 .facestars img { position: absolute; opacity: 0.18; }
-nav, main, .namebadge { position: relative; z-index: 1; }
+main, .namebadge { position: relative; z-index: 1; }
 a { color: var(--ink); }
-nav {
-  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-  padding: 10px 16px; background: #000; border-bottom: 1px solid var(--muted);
-  text-transform: uppercase; letter-spacing: 0.06em;
-}
-nav a { color: var(--muted); text-decoration: none; font-weight: 700; }
-nav a:hover { color: var(--honey); }
-nav a:not(.brand)::before { content: "[ "; }
-nav a:not(.brand)::after { content: " ]"; }
-nav .brand { color: var(--honey); margin-right: 12px; text-shadow: 0 0 8px rgba(255,176,0,0.4); }
 main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }
 h1 {
   color: var(--honey); margin: 0.4em 0; text-transform: uppercase;

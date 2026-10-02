@@ -61,7 +61,6 @@ async function playerGate(c: C, next: () => Promise<void>) {
   return c.html(
     layout({
       title: "Password",
-      nav: false,
       body: `<div class="center"><form class="card" style="max-width:360px;margin:40px auto" method="get">
   <h1>Hive Mind</h1>${err}
   <label>Password</label>
@@ -208,7 +207,6 @@ app.get("/", (c) =>
   c.html(
     layout({
       title: "Home",
-      nav: false,
       body: `
 <div class="center" style="margin-top:40px">
   <pre class="banner" style="display:inline-block;text-align:left">${BANNER}</pre>
@@ -233,7 +231,6 @@ app.get("/suggest", (c) =>
   c.html(
     layout({
       title: "Suggest a question",
-      nav: false,
       body: `
 <p><a href="/play" style="color:var(--muted)">← back to the game</a></p>
 <h1>Suggest a question</h1>
@@ -302,7 +299,6 @@ app.get("/play", (c) =>
   c.html(
     layout({
       title: "Play",
-      nav: false,
       body: `<div id="nameBadge" class="namebadge" style="display:none" title="Tap to change your name"></div>
 <div id="app"><p class="muted">Loading…</p></div>`,
       script: PLAY_JS,
@@ -318,7 +314,6 @@ app.get("/board", (c) => {
   return c.html(
     layout({
       title: "Big screen",
-      nav: false,
       body: `<style>main{max-width:1600px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
       script:
         `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_TXT = ${JSON.stringify(BANNER)};\n` +

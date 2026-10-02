@@ -18,9 +18,11 @@ export const BANNER = String.raw`
 
 /**
  * Fixed background layer of star-cropped faces (public/faces/star*.png).
- * Deterministic scatter, mostly hugging the viewport edges so the centered
- * content column stays readable. Opaque cards hide whatever sits under them.
+ * Spots mostly hug the viewport edges so the centered content column stays
+ * readable; opaque cards hide whatever sits under them. There are more face
+ * images than spots, so each page load samples a random subset.
  */
+const FACE_COUNT = 41;
 const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [
   ["left:-2%", "top:4%", 160],
   ["right:-2%", "top:10%", 145],
@@ -36,14 +38,34 @@ const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [
   ["right:36%", "top:3%", 95],
   ["left:44%", "top:52%", 110],
   ["right:44%", "top:28%", 100],
+  ["left:1%", "top:18%", 120],
+  ["right:0%", "top:24%", 110],
+  ["left:6%", "top:50%", 135],
+  ["right:7%", "top:55%", 120],
+  ["left:0%", "top:80%", 125],
+  ["right:3%", "top:84%", 140],
+  ["left:15%", "top:8%", 100],
+  ["right:16%", "top:70%", 105],
+  ["left:28%", "top:92%", 115],
+  ["right:28%", "top:-4%", 100],
+  ["left:40%", "top:10%", 95],
+  ["right:40%", "top:64%", 105],
 ];
-const FACE_LAYER =
-  `<div class="facestars" aria-hidden="true">` +
-  FACE_SPOTS.map(
-    ([pos, top, w], i) =>
-      `<img src="/faces/star${i}.png" alt="" style="${pos};${top};width:${w}px">`
-  ).join("") +
-  `</div>`;
+function faceLayer(): string {
+  const ids = Array.from({ length: FACE_COUNT }, (_, i) => i);
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  return (
+    `<div class="facestars" aria-hidden="true">` +
+    FACE_SPOTS.map(
+      ([pos, top, w], i) =>
+        `<img src="/faces/star${ids[i]}.png" alt="" style="${pos};${top};width:${w}px">`
+    ).join("") +
+    `</div>`
+  );
+}
 
 export function layout(o: {
   title: string;
@@ -70,7 +92,7 @@ export function layout(o: {
 <style>${CSS}</style>
 </head>
 <body>
-${FACE_LAYER}
+${faceLayer()}
 ${nav}
 <main id="content">${o.body}</main>
 ${o.script ? `<script>${o.script}</script>` : ""}
@@ -104,7 +126,7 @@ body::before {
 }
 /* Star-cropped face scatter behind everything */
 .facestars { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-.facestars img { position: absolute; opacity: 0.15; }
+.facestars img { position: absolute; opacity: 0.18; }
 nav, main, .namebadge { position: relative; z-index: 1; }
 a { color: var(--ink); }
 nav {

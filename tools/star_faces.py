@@ -8,7 +8,12 @@ import random
 from PIL import Image, ImageDraw, ImageOps
 
 # Face ids confirmed as Chris Manning from the contact sheets.
-CHRIS = [4, 10, 31, 101, 139, 168, 192, 216, 229, 252, 279, 288, 333, 338]
+# One id per source photo (duplicate detections of the same shot excluded).
+CHRIS = [
+    4, 10, 17, 20, 31, 50, 78, 99, 101, 111, 114, 120, 128, 139,
+    160, 168, 170, 175, 192, 211, 216, 218, 223, 229, 231, 233, 238,
+    250, 252, 260, 269, 279, 288, 295, 303, 308, 316, 321, 330, 333, 338,
+]
 
 OUT = "public/faces"
 os.makedirs(OUT, exist_ok=True)
@@ -18,8 +23,17 @@ POINTS = 14         # star points ("many points")
 INNER = 0.80        # inner/outer radius ratio — high = badge/burst look
 SS = 4              # supersample factor for smooth star edges
 
-GREEN = (43, 255, 111)
-AMBER = (255, 176, 0)
+# Phosphor-bright palette, cycled across the faces.
+PALETTE = [
+    (43, 255, 111),   # green
+    (255, 176, 0),    # amber
+    (64, 220, 255),   # cyan
+    (255, 92, 230),   # magenta
+    (255, 80, 80),    # red
+    (130, 150, 255),  # blue
+    (255, 235, 70),   # yellow
+    (255, 130, 40),   # orange
+]
 
 
 def star_mask(size: int, rot_deg: float) -> Image.Image:
@@ -61,7 +75,7 @@ for n, fid in enumerate(CHRIS):
     side = min(w, h)
     img = img.crop(((w - side) // 2, (h - side) // 2, (w + side) // 2, (h + side) // 2))
     img = img.resize((SIZE, SIZE), Image.LANCZOS)
-    color = GREEN if n % 2 == 0 else AMBER
+    color = PALETTE[n % len(PALETTE)]
     img = duotone(img, color)
     rot = random.uniform(-14, 14)
     out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
@@ -71,10 +85,13 @@ for n, fid in enumerate(CHRIS):
     made.append(path)
     print(path, os.path.getsize(path) // 1024, "KB")
 
-# preview strip
-strip = Image.new("RGBA", (SIZE // 2 * len(made), SIZE // 2), (10, 10, 10, 255))
+# preview grid
+cell = SIZE // 2
+cols = 8
+rows = (len(made) + cols - 1) // cols
+grid = Image.new("RGBA", (cell * cols, cell * rows), (10, 10, 10, 255))
 for i, p in enumerate(made):
-    im = Image.open(p).resize((SIZE // 2, SIZE // 2))
-    strip.paste(im, (i * SIZE // 2, 0), im)
-strip.convert("RGB").save("/tmp/star_preview.png")
+    im = Image.open(p).resize((cell, cell))
+    grid.paste(im, ((i % cols) * cell, (i // cols) * cell), im)
+grid.convert("RGB").save("/tmp/star_preview.png")
 print("/tmp/star_preview.png")

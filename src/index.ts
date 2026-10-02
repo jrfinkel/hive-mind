@@ -1122,7 +1122,6 @@ function renderForm() {
   sapp.innerHTML = \`
   <div id="sflash"></div>
   <form class="card" id="sugForm">
-    <p class="muted small">Suggesting as <strong>\${esc(player.name)}</strong></p>
     <label>Your question</label>
     <div class="qcompose">
       <span class="qword">Name</span>

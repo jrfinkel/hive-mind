@@ -246,11 +246,11 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .qcompose .qthing { flex: 1; }
 
 /* Big-screen board (/board) */
-.board { text-align: center; padding-top: 10px; }
-.board .banner { font-size: clamp(8px, 1.6vw, 16px); display: inline-block; text-align: left; }
+.board { text-align: center; padding-top: 0; }
+.board .banner { font-size: clamp(7px, 1.2vw, 12px); display: inline-block; text-align: left; margin: 6px 0; }
 .board .bq {
-  font-size: 2.6em; font-weight: 800; line-height: 1.3; margin: 20px auto;
-  padding: 24px 30px; background: #000; border: 3px double var(--honey);
+  font-size: clamp(1.4em, 3.4vh, 2.4em); font-weight: 800; line-height: 1.3; margin: 14px auto;
+  padding: 18px 26px; background: #000; border: 3px double var(--honey);
   max-width: 1000px; text-align: left; color: var(--ink);
 }
 .board .bcd { font-size: 4.5em; font-weight: 800; color: var(--honey); font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(255,176,0,0.5); }
@@ -258,20 +258,21 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .board .bstats .stat { padding: 16px 34px; }
 .board .bstats .n { font-size: 2.6em; }
 .board .bstats .l { font-size: 1em; }
-.board .bjoin { color: var(--muted); font-size: 1.3em; margin-top: 34px; text-transform: uppercase; letter-spacing: 0.06em; }
+.board .bjoin { color: var(--muted); font-size: 1.1em; margin-top: 18px; text-transform: uppercase; letter-spacing: 0.06em; }
 .board .bjoin a { text-decoration: none; }
 .board .bjoin strong { color: var(--honey); text-shadow: 0 0 8px rgba(255,176,0,0.4); text-transform: none; }
-.board .bcols { display: flex; gap: 20px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+.board .bcols { display: flex; gap: 14px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
 .board .bpanel {
   background: var(--panel); border: 1px solid var(--muted);
-  padding: 16px 24px; flex: 1 1 380px; max-width: 540px; text-align: left;
+  padding: 12px 18px; flex: 1 1 290px; max-width: 480px; text-align: left;
+  min-width: 0; /* let panels shrink below content width so all fit one row */
 }
-.board .bpanel h2 { margin-top: 0; color: var(--honey); }
-.board .bcluster { display: flex; gap: 14px; align-items: center; font-size: 1.5em; padding: 7px 0; }
+.board .bpanel h2 { margin-top: 0; color: var(--honey); font-size: 1.05em; }
+.board .bcluster { display: flex; gap: 12px; align-items: center; font-size: 1.2em; padding: 5px 0; }
 .board .bcluster .count {
   min-width: 2em; text-align: center; background: var(--honey); color: #000;
   border-radius: 0; font-weight: 800; padding: 2px 6px; font-size: 0.9em; text-shadow: none;
 }
-.board .btable { font-size: 1.3em; }
-.board .btable td { border-bottom: 1px dashed var(--muted); padding: 6px 10px; }
+.board .btable { font-size: 1.1em; }
+.board .btable td { border-bottom: 1px dashed var(--muted); padding: 4px 10px; }
 `;

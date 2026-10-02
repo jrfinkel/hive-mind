@@ -319,7 +319,7 @@ app.get("/board", (c) => {
     layout({
       title: "Big screen",
       nav: false,
-      body: `<style>main{max-width:1150px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
+      body: `<style>main{max-width:1600px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
       script:
         `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_TXT = ${JSON.stringify(BANNER)};\n` +
         BOARD_JS,
@@ -1183,7 +1183,7 @@ function startCountdown(closesAt) {
 function scoreTableHtml(title, rows) {
   if (!(rows || []).length) return '';
   return '<div class="bpanel"><h2>' + title + '</h2><table class="btable">' +
-    rows.map((r, i) =>
+    rows.slice(0, 8).map((r, i) =>
       '<tr><td>' + (['#1','#2','#3'][i] ?? '#' + (i + 1)) + '</td><td>' + esc(r.name) + '</td><td><strong>' + r.pts + '</strong></td></tr>').join('') +
     '</table></div>';
 }
@@ -1224,7 +1224,7 @@ function render(s) {
       <div class="bq">\${esc(s.round.question)}</div>
       <div class="bcd blink">SCORING</div>\`;
   } else if (s.last) {
-    const clusters = (s.last.clusters || []).map(c =>
+    const clusters = (s.last.clusters || []).slice(0, 8).map(c =>
       '<div class="bcluster"><span class="count">' + c.size + '</span><span>' + esc(c.label) + '</span></div>').join('');
     app.innerHTML = \`
       \${bannerHtml}
@@ -1232,7 +1232,7 @@ function render(s) {
       <div class="bcols">
         <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
         \${scoreTableHtml('Round scores', s.last.top)}
-        \${scoreTableHtml('High scores', s.leaderboard)}
+        \${scoreTableHtml('Leaderboard', s.leaderboard)}
         \${suggestionsHtml(s)}
       </div>
       \${joinHint}\`;

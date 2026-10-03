@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env, Round } from "./types";
 import { now } from "./types";
+import { renderSVG } from "uqr";
 import { layout, esc, BANNER } from "./ui";
 import { scoreRound } from "./scoring";
 
@@ -169,12 +170,15 @@ async function computeSharedState(c: C): Promise<Record<string, unknown>> {
 
   // Precomputed at scoring time (see scoring.ts writeMeta).
   const { results: meta } = await c.env.DB.prepare(
-    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over')"
+    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over', 'round_ranks', 'overall_ranks')"
   ).all<{ k: string; v: string }>();
   for (const m of meta) {
     if (m.k === "last_results") out.last = JSON.parse(m.v);
     if (m.k === "leaderboard") out.leaderboard = JSON.parse(m.v);
     if (m.k === "game_over") out.finale = true;
+    // Internal (contain player ids) — stripped from every /api/state response.
+    if (m.k === "round_ranks") out._round_ranks = JSON.parse(m.v);
+    if (m.k === "overall_ranks") out._overall_ranks = JSON.parse(m.v);
   }
   out.leaderboard ??= [];
 
@@ -326,12 +330,14 @@ app.get("/play", (c) =>
 app.get("/board", (c) => {
   const origin = new URL(c.req.url).origin;
   const playUrl = `${origin}/play`;
+  // Dark-on-light QR (inverted QRs scan poorly), rendered inline as SVG.
+  const qrSvg = renderSVG(playUrl, { ecc: "M", border: 2 });
   return c.html(
     layout({
       title: "Big screen",
       body: `<style>main{max-width:1600px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
       script:
-        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_TXT = ${JSON.stringify(BANNER)};\n` +
+        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_TXT = ${JSON.stringify(BANNER)};\nconst QR_SVG = ${JSON.stringify(qrSvg)};\n` +
         BOARD_JS,
     })
   );
@@ -427,6 +433,11 @@ app.get("/api/state", async (c) => {
   }
   const shared = sharedCache.data;
   const out: Record<string, unknown> = { ...shared, server_time: t };
+  // Never ship the internal rank maps (they're keyed by player id).
+  const roundRanks = out._round_ranks as { round_id: number; ranks: Record<string, number> } | undefined;
+  const overallRanks = out._overall_ranks as Record<string, number> | undefined;
+  delete out._round_ranks;
+  delete out._overall_ranks;
   if (unknownPlayer) out.unknown_player = true;
   const round = shared.round as { id: number; closes_at: number | null } | undefined;
   if (round) {
@@ -463,6 +474,12 @@ app.get("/api/state", async (c) => {
         };
       }
     }
+    const place: Record<string, number> = {};
+    if (roundRanks && last && roundRanks.round_id === last.id && roundRanks.ranks[playerId]) {
+      place.round = roundRanks.ranks[playerId];
+    }
+    if (overallRanks?.[playerId]) place.overall = overallRanks[playerId];
+    if (Object.keys(place).length) out.your_place = place;
     const { results: votes } = await c.env.DB.prepare(
       "SELECT suggestion_id, vote FROM suggestion_votes WHERE player_id = ?"
     )
@@ -684,6 +701,7 @@ app.get("/admin", async (c) => {
   <form id="ask${s.id}" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="${s.id}"></form>
   ${minutesSelect(`ask${s.id}`)}
   <button class="btn sm" form="ask${s.id}" ${round ? "disabled title='Finish the current round first'" : ""}>Ask now</button>
+  <button type="button" class="btn sm secondary" data-edit="${s.id}" data-num="${s.num}" data-text="${esc(s.text)}">Edit</button>
   <form method="post" action="/admin/suggestion/${s.id}/delete"><button class="btn sm secondary">Delete</button></form>
 </div>`
         )
@@ -757,6 +775,7 @@ function tick(){
 tick(); setInterval(tick,1000);
 let sugKey='';
 function renderSugs(s){
+  if(document.querySelector('.sugedit')) return; // don't wipe an open editor
   const sugs=s.suggestions||[];
   const key=JSON.stringify(sugs);
   if(key===sugKey) return;
@@ -771,9 +790,23 @@ function renderSugs(s){
     '<form id="ask'+g.id+'" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="'+g.id+'"></form>'+
     '<select name="minutes" form="ask'+g.id+'" title="Timer">'+minutes+'</select>'+
     '<button class="btn sm" form="ask'+g.id+'"'+dis+'>Ask now</button>'+
+    '<button type="button" class="btn sm secondary" data-edit="'+g.id+'" data-num="'+g.num+'" data-text="'+escj(g.text)+'">Edit</button>'+
     '<form method="post" action="/admin/suggestion/'+g.id+'/delete"><button class="btn sm secondary">Delete</button></form>'+
     '</div>').join('') : '<p class="muted">No pending suggestions.</p>';
 }
+document.getElementById('sugList').addEventListener('click', e=>{
+  const b=e.target.closest('button[data-edit]');
+  if(!b) return;
+  const row=b.closest('.suggestion-row');
+  row.innerHTML='<form method="post" action="/admin/suggestion/'+b.dataset.edit+'/edit" class="sugedit qcompose" style="flex:1">'+
+    '<span class="qword">Name</span>'+
+    '<input type="number" name="num" min="1" max="10" value="'+escj(b.dataset.num)+'" class="qnum">'+
+    '<input type="text" name="thing" maxlength="280" value="'+escj(b.dataset.text)+'" class="qthing" required>'+
+    '<button class="btn sm">Save</button>'+
+    '<button type="button" class="btn sm secondary" data-cancel>Cancel</button></form>';
+  row.querySelector('[data-cancel]').onclick=()=>{ row.remove(); sugKey=''; poll(); };
+  row.querySelector('.qthing').focus();
+});
 async function poll(){
   try{
     const s=await (await fetch('/api/admin/state')).json();
@@ -880,6 +913,22 @@ app.post("/admin/close", async (c) => {
     startScoring(c, round.id);
   }
   sharedCache = null;
+  return c.redirect("/admin");
+});
+
+app.post("/admin/suggestion/:id/edit", async (c) => {
+  const id = Number(c.req.param("id"));
+  const form = await c.req.formData();
+  const thing = String(form.get("thing") ?? "").trim().slice(0, 280);
+  const num = Math.max(1, Math.min(10, Number(form.get("num") ?? 1) || 1));
+  if (thing) {
+    await c.env.DB.prepare(
+      "UPDATE suggestions SET text = ?, num = ? WHERE id = ? AND status = 'pending'"
+    )
+      .bind(thing, num, id)
+      .run();
+    sharedCache = null;
+  }
   return c.redirect("/admin");
 });
 
@@ -1001,18 +1050,17 @@ function lastResultsHtml(s) {
         ).join('<br>')}
         <br><strong>Total: \${s.last.your.total} pt\${s.last.your.total === 1 ? '' : 's'}</strong></div>\`
     : '';
-  const clusters = (s.last.clusters || []).map(c =>
-    \`<div class="cluster"><span class="count">\${c.size}</span><strong>\${esc(c.label)}</strong></div>\`).join('');
-  const lb = (s.leaderboard || []).length
-    ? '<h2>Top players</h2><div class="card"><table>' + s.leaderboard.map((r, i) =>
-        \`<tr\${player && r.name === player.name ? ' class="me"' : ''}><td>\${['#1','#2','#3'][i] ?? '#'+(i+1)}</td><td>\${esc(r.name)}</td><td><strong>\${r.pts}</strong></td></tr>\`).join('')
-      + '</table></div><p class="center"><a class="btn secondary" href="/leaderboard">Full leaderboard</a></p>'
+  const p = s.your_place || {};
+  const place = (p.round || p.overall)
+    ? '<div class="statgrid" style="justify-content:center;margin:14px 0">' +
+      (p.round ? '<div class="stat"><div class="n">#' + p.round + '</div><div class="l">this round</div></div>' : '') +
+      (p.overall ? '<div class="stat"><div class="n">#' + p.overall + '</div><div class="l">overall</div></div>' : '') +
+      '</div>'
     : '';
   return \`<h2>Last question</h2>
     <div class="question">\${esc(s.last.question)}</div>
     \${your}
-    <div class="card">\${clusters || '<p class="muted">No answers.</p>'}</div>
-    \${lb}\`;
+    \${place}\`;
 }
 
 function startCountdown(closesAt) {
@@ -1209,7 +1257,9 @@ const BOARD_JS = `
 const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let viewKey = '', countdownTimer = null;
-const joinHint = '<p class="bjoin">&gt;&gt; join the game: <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a> &lt;&lt;</p>';
+const joinHint = '<div class="bjoinrow">' +
+  '<p class="bjoin">&gt;&gt; join the game: <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a> &lt;&lt;</p>' +
+  '<div class="bqr">' + QR_SVG + '</div></div>';
 const bannerHtml = '<pre class="banner">' + BANNER_TXT + '</pre>';
 
 function startCountdown(closesAt) {

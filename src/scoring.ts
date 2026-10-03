@@ -92,6 +92,22 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
  * Precompute the payloads that every player poll displays (last round results
  * + leaderboard) so /api/state never aggregates over the answers table.
  */
+/** player_id -> place, with ties sharing a place (1,2,2,4). Rows must be
+ * sorted by pts descending. */
+function rankMap(rows: { player_id: string; pts: number }[]): Record<string, number> {
+  const m: Record<string, number> = {};
+  let rank = 0;
+  let prev = Infinity;
+  rows.forEach((r, i) => {
+    if (r.pts < prev) {
+      rank = i + 1;
+      prev = r.pts;
+    }
+    m[r.player_id] = rank;
+  });
+  return m;
+}
+
 async function writeMeta(env: Env, roundId: number): Promise<void> {
   const stmts: D1PreparedStatement[] = [];
 
@@ -105,6 +121,18 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
   stmts.push(
     env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('leaderboard', ?)").bind(
       JSON.stringify(top)
+    )
+  );
+
+  // Full overall rank map for per-player "your place" stats on /play.
+  const { results: overallAll } = await env.DB.prepare(
+    `SELECT a.player_id, SUM(a.points) AS pts FROM answers a
+     JOIN rounds r ON r.id = a.round_id AND r.status = 'scored'
+     GROUP BY a.player_id ORDER BY pts DESC`
+  ).all<{ player_id: string; pts: number }>();
+  stmts.push(
+    env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('overall_ranks', ?)").bind(
+      JSON.stringify(rankMap(overallAll))
     )
   );
 
@@ -135,6 +163,17 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
     )
       .bind(roundId)
       .all<{ name: string; pts: number }>();
+    const { results: roundAll } = await env.DB.prepare(
+      `SELECT player_id, SUM(points) AS pts FROM answers
+       WHERE round_id = ? GROUP BY player_id ORDER BY pts DESC`
+    )
+      .bind(roundId)
+      .all<{ player_id: string; pts: number }>();
+    stmts.push(
+      env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('round_ranks', ?)").bind(
+        JSON.stringify({ round_id: roundId, ranks: rankMap(roundAll) })
+      )
+    );
     stmts.push(
       env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('last_results', ?)").bind(
         JSON.stringify({

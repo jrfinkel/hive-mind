@@ -240,7 +240,9 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .board .bstats .stat { padding: 16px 34px; }
 .board .bstats .n { font-size: 2.6em; }
 .board .bstats .l { font-size: 1em; }
-.board .bjoin { color: var(--muted); font-size: 1.1em; margin-top: 18px; text-transform: uppercase; letter-spacing: 0.06em; }
+.board .bjoinrow { display: flex; gap: 22px; align-items: center; justify-content: center; margin-top: 14px; }
+.board .bjoin { color: var(--muted); font-size: 1.1em; margin: 0; text-transform: uppercase; letter-spacing: 0.06em; }
+.board .bqr svg { width: 128px; height: 128px; display: block; }
 .board .bjoin a { text-decoration: none; }
 .board .bjoin strong { color: var(--honey); text-shadow: 0 0 8px rgba(255,176,0,0.4); text-transform: none; }
 .board .bcols { display: flex; gap: 14px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }

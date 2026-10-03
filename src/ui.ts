@@ -106,10 +106,12 @@ export const CSS = `
   --radius: 0;
 }
 * { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.55 ui-monospace, Menlo, Monaco, "Cascadia Mono", "Courier New", monospace;
   text-shadow: 0 0 6px rgba(43, 255, 111, 0.28);
+  overflow-x: hidden;
 }
 /* CRT scanlines */
 body::before {
@@ -148,6 +150,7 @@ label { display: block; font-weight: 700; margin: 12px 0 4px; text-transform: up
 input[type=text], input[type=password], input[type=number], textarea, select {
   width: 100%; padding: 10px 12px; border-radius: 0; border: 1px solid var(--muted);
   background: #000; color: var(--ink); font: inherit; caret-color: var(--ink);
+  font-size: 16px; /* <16px makes iOS Safari zoom in on focus and stay zoomed */
 }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--honey); }
 textarea { min-height: 90px; resize: vertical; }
@@ -226,6 +229,7 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .stat .n { font-size: 1.6em; font-weight: 800; color: var(--honey); }
 .stat .l { font-size: 0.75em; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .qcompose { display: flex; gap: 8px; align-items: center; }
+.qcompose input { min-width: 0; }
 .qcompose .qword { font-weight: 800; color: var(--honey); font-size: 1.1em; text-transform: uppercase; }
 .qcompose .qnum { width: 74px; flex: none; }
 .qcompose .qthing { flex: 1; }

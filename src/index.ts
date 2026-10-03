@@ -35,7 +35,7 @@ async function isAdmin(c: C): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Player gate: /play and /suggest need PLAYER_PASSWORD. The board advertises
+// Player gate: /play needs PLAYER_PASSWORD. The board advertises
 // /play?pw=<password>, which sets a cookie and redirects, so players arriving
 // from the board go straight to the name prompt.
 // ---------------------------------------------------------------------------
@@ -73,7 +73,6 @@ async function playerGate(c: C, next: () => Promise<void>) {
 }
 
 app.use("/play", playerGate);
-app.use("/suggest", playerGate);
 
 // ---------------------------------------------------------------------------
 // Round helpers
@@ -231,19 +230,6 @@ app.get("/", (c) =>
 
 /** Compose the displayed question from its parts: "Name 3 important NLP researchers". */
 const composeQuestion = (num: number, thing: string) => `Name ${num} ${thing}`;
-
-app.get("/suggest", (c) =>
-  c.html(
-    layout({
-      title: "Suggest a question",
-      body: `
-<p><a href="/play" style="color:var(--muted)">← back to the game</a></p>
-<h1>Suggest a question</h1>
-<div id="sapp"><p class="muted">Loading…</p></div>`,
-      script: SUGGEST_JS,
-    })
-  )
-);
 
 app.post("/api/suggest", async (c) => {
   const body = await c.req.json<{ player_id?: string; num?: number; thing?: string }>();
@@ -697,7 +683,7 @@ app.get("/admin", async (c) => {
         .map(
           (s) => `<div class="suggestion-row">
   <span class="pill" title="player votes">${s.score > 0 ? "+" : ""}${s.score}</span>
-  <span class="text">${esc(composeQuestion(s.num, s.text))} <span class="muted small">— ${esc(s.author ?? "?")}</span></span>
+  <span class="text">${esc(composeQuestion(s.num, s.text))} <span class="muted small">— ${esc(s.author ?? "admin")}</span></span>
   <form id="ask${s.id}" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="${s.id}"></form>
   ${minutesSelect(`ask${s.id}`)}
   <button class="btn sm" form="ask${s.id}" ${round ? "disabled title='Finish the current round first'" : ""}>Ask now</button>
@@ -729,15 +715,14 @@ ${roundCard}
 <div class="card">
   <h3 style="margin-top:0">Suggestions queue (<span id="sugCount">${pending.length}</span>)</h3>
   <div id="sugList">${suggestionRows}</div>
-  <h3>Or ask your own</h3>
-  <form id="custom" method="post" action="/admin/open">
+  <h3>Or add your own</h3>
+  <form id="custom" method="post" action="/admin/suggest">
     <div class="qcompose">
       <span class="qword">Name</span>
       <input type="number" name="num" value="1" min="1" max="10" class="qnum">
       <input type="text" name="thing" maxlength="280" class="qthing" placeholder="important NLP researchers">
     </div>
-    <div class="btn-row">${minutesSelect("custom")}
-      <button class="btn" ${round ? "disabled title='Finish the current round first'" : ""}>Ask now</button></div>
+    <div class="btn-row"><button class="btn">Add to queue</button></div>
   </form>
 </div>
 <h2>Recent rounds</h2>
@@ -786,7 +771,7 @@ function renderSugs(s){
   document.getElementById('sugList').innerHTML = sugs.length ? sugs.map(g=>
     '<div class="suggestion-row">'+
     '<span class="pill" title="player votes">'+(g.score>0?'+':'')+g.score+'</span>'+
-    '<span class="text">'+escj('Name '+g.num+' '+g.text)+' <span class="muted small">— '+escj(g.author??'?')+'</span></span>'+
+    '<span class="text">'+escj('Name '+g.num+' '+g.text)+' <span class="muted small">— '+escj(g.author??'admin')+'</span></span>'+
     '<form id="ask'+g.id+'" method="post" action="/admin/open"><input type="hidden" name="suggestion_id" value="'+g.id+'"></form>'+
     '<select name="minutes" form="ask'+g.id+'" title="Timer">'+minutes+'</select>'+
     '<button class="btn sm" form="ask'+g.id+'"'+dis+'>Ask now</button>'+
@@ -913,6 +898,22 @@ app.post("/admin/close", async (c) => {
     startScoring(c, round.id);
   }
   sharedCache = null;
+  return c.redirect("/admin");
+});
+
+app.post("/admin/suggest", async (c) => {
+  const form = await c.req.formData();
+  const thing = String(form.get("thing") ?? "").trim().slice(0, 280);
+  const num = Math.max(1, Math.min(10, Number(form.get("num") ?? 1) || 1));
+  if (thing) {
+    // player_id NULL marks it as an admin suggestion.
+    await c.env.DB.prepare(
+      "INSERT INTO suggestions (text, num, player_id, created_at) VALUES (?, ?, NULL, ?)"
+    )
+      .bind(thing, num, now())
+      .run();
+    sharedCache = null;
+  }
   return c.redirect("/admin");
 });
 
@@ -1043,23 +1044,25 @@ updateBadge();
 
 function lastResultsHtml(s) {
   if (!s.last) return '';
-  const your = s.last.your
-    ? \`<div class="flash \${s.last.your.total > s.last.your.answers.length ? 'ok' : 'err'}">
-        \${s.last.your.answers.map(a =>
-          \`“\${esc(a.text)}” — \${a.points} pt\${a.points === 1 ? '' : 's'}\`
-        ).join('<br>')}
-        <br><strong>Total: \${s.last.your.total} pt\${s.last.your.total === 1 ? '' : 's'}</strong></div>\`
+  const tops = (s.last.clusters || []).slice(0, 8).map(c =>
+    \`<div class="cluster"><span class="count">\${c.size}</span><strong>\${esc(c.label)}</strong></div>\`).join('');
+  const yours = s.last.your
+    ? s.last.your.answers.map(a =>
+        \`<div class="cluster"><span class="count">\${a.points}</span><span>“\${esc(a.text)}”</span></div>\`).join('') +
+      \`<div class="cluster"><span class="count">\${s.last.your.total}</span><strong>TOTAL</strong></div>\`
     : '';
   const p = s.your_place || {};
-  const place = (p.round || p.overall)
-    ? '<div class="statgrid" style="justify-content:center;margin:14px 0">' +
-      (p.round ? '<div class="stat"><div class="n">#' + p.round + '</div><div class="l">this round</div></div>' : '') +
-      (p.overall ? '<div class="stat"><div class="n">#' + p.overall + '</div><div class="l">overall</div></div>' : '') +
-      '</div>'
-    : '';
+  const place = '<div class="statgrid" style="justify-content:center;margin:14px 0">' +
+    (p.round ? '<div class="stat"><div class="n">#' + p.round + '</div><div class="l">this round</div></div>' : '') +
+    (p.overall ? '<div class="stat"><div class="n">#' + p.overall + '</div><div class="l">overall</div></div>' : '') +
+    '<a class="stat" href="/leaderboard" style="text-decoration:none"><div class="n">»</div><div class="l">leaderboard</div></a>' +
+    '</div>';
   return \`<h2>Last question</h2>
     <div class="question">\${esc(s.last.question)}</div>
-    \${your}
+    <div class="twocol">
+      <div class="card"><h3 style="margin-top:0">Top answers</h3>\${tops || '<p class="muted">No answers.</p>'}</div>
+      \${yours ? '<div class="card"><h3 style="margin-top:0">Your answers</h3>' + yours + '</div>' : ''}
+    </div>
     \${place}\`;
 }
 
@@ -1114,20 +1117,22 @@ function render() {
       if (r.ok) { viewKey = ''; poll(); }
       else { const j = await r.json().catch(() => ({})); errEl.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>'; }
     };
-  } else if (s.status === 'open' && s.answered) {
+  } else if ((s.status === 'open' || s.status === 'scoring') && s.answered) {
+    // Waiting for the round to wrap up (incl. scoring — no separate screen);
+    // the results view takes over on the next poll after scores land.
     app.innerHTML = \`
-      <p class="small"><span class="pill live">ROUND LIVE</span> \${s.round.closes_at ? '<span class="countdown" id="cd"></span> left' : ''}</p>
+      <p class="small"><span class="pill live">ROUND LIVE</span> \${s.status === 'open' && s.round.closes_at ? '<span class="countdown" id="cd"></span> left' : ''}</p>
       <div class="question">\${esc(s.round.question)}</div>
       <div class="card center">
-        <p class="big">[LOCKED IN] \${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
+        <p class="big">\${(s.your_answers || []).map(a => '“' + esc(a) + '”').join(' · ')}</p>
         <p class="muted"><span id="liveCount">\${s.answer_count}</span> answered</p>
       </div>
       <div id="sugSection"></div>\`;
-    startCountdown(s.round.closes_at);
+    startCountdown(s.status === 'open' ? s.round.closes_at : null);
   } else if (s.status === 'scoring') {
     app.innerHTML = \`
-      <div class="question">\${esc(s.round.question)}</div>
-      <div class="card center"><p class="big blink">SCORING</p></div>\`;
+      <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p></div>
+      <div id="sugSection"></div>\`;
   } else {
     app.innerHTML = \`
       <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p></div>
@@ -1136,27 +1141,59 @@ function render() {
   }
 }
 
+let sugListKey = '';
 function renderSuggestions(s) {
   const el = document.getElementById('sugSection');
   if (!el) return;
+  if (!document.getElementById('voteBox')) {
+    // Static shell built once (the suggest form must survive polls),
+    // only the vote list re-renders.
+    el.innerHTML = '<h2>Vote on upcoming questions</h2><div class="card" id="voteBox">' +
+      '<div id="voteList"></div>' +
+      '<form id="sugForm" class="qcompose" style="margin-top:12px">' +
+        '<span class="qword">Name</span>' +
+        '<input type="number" id="sugNum" value="1" min="1" max="10" class="qnum">' +
+        '<input type="text" id="sugThing" maxlength="280" class="qthing" placeholder="NLP researchers">' +
+        '<button class="btn sm">Add</button>' +
+      '</form><div id="sugMsg"></div></div>';
+    sugListKey = '';
+    document.getElementById('voteList').onclick = async (e) => {
+      const b = e.target.closest('button[data-vote]');
+      if (!b) return;
+      await fetch('/api/vote', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ player_id: player.player_id, suggestion_id: Number(b.dataset.id), vote: Number(b.dataset.vote) }) });
+      poll();
+    };
+    document.getElementById('sugForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const thing = document.getElementById('sugThing').value.trim();
+      const num = Number(document.getElementById('sugNum').value) || 1;
+      const msg = document.getElementById('sugMsg');
+      if (!thing) return;
+      const r = await fetch('/api/suggest', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ player_id: player.player_id, num, thing }) });
+      if (r.ok) {
+        document.getElementById('sugThing').value = '';
+        msg.innerHTML = '<div class="flash ok">In the queue.</div>';
+        poll();
+      } else {
+        const j = await r.json().catch(() => ({}));
+        msg.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>';
+      }
+    };
+  }
   const sugs = s.suggestions || [];
-  el.innerHTML = '<h2>Vote on upcoming questions</h2><div class="card">' +
-    (sugs.length
-      ? sugs.map(g =>
-          '<div class="sugrow">' +
-          '<button class="votebtn' + (g.your_vote === 1 ? ' active' : '') + '" data-id="' + g.id + '" data-vote="1">▲</button>' +
-          '<span class="sugscore">' + g.score + '</span>' +
-          '<button class="votebtn down' + (g.your_vote === -1 ? ' active' : '') + '" data-id="' + g.id + '" data-vote="-1">▼</button>' +
-          '<span class="sugtext">Name ' + g.num + ' ' + esc(g.text) + '</span></div>').join('')
-      : '<p class="muted">Nothing in the queue yet.</p>') +
-    '<p class="small" style="margin-bottom:0"><a href="/suggest" style="color:var(--honey)">Suggest a question →</a></p></div>';
-  el.onclick = async (e) => {
-    const b = e.target.closest('button[data-vote]');
-    if (!b) return;
-    await fetch('/api/vote', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ player_id: player.player_id, suggestion_id: Number(b.dataset.id), vote: Number(b.dataset.vote) }) });
-    poll();
-  };
+  const key = JSON.stringify(sugs);
+  if (key === sugListKey) return;
+  sugListKey = key;
+  document.getElementById('voteList').innerHTML = sugs.length
+    ? sugs.map(g =>
+        '<div class="sugrow">' +
+        '<button class="votebtn' + (g.your_vote === 1 ? ' active' : '') + '" data-id="' + g.id + '" data-vote="1">▲</button>' +
+        '<span class="sugscore">' + g.score + '</span>' +
+        '<button class="votebtn down' + (g.your_vote === -1 ? ' active' : '') + '" data-id="' + g.id + '" data-vote="-1">▼</button>' +
+        '<span class="sugtext">Name ' + g.num + ' ' + esc(g.text) + '</span></div>').join('')
+    : '<p class="muted">Nothing in the queue yet.</p>';
 }
 
 async function poll() {
@@ -1181,72 +1218,6 @@ async function poll() {
 }
 poll();
 setInterval(poll, 2500);
-`;
-
-// ---------------------------------------------------------------------------
-// Suggest page client script (requires a player identity so the host can see
-// who suggested what; shares the same localStorage identity as /play)
-// ---------------------------------------------------------------------------
-
-const SUGGEST_JS = `
-const LS = 'hiveMindPlayer';
-let player = null;
-try { player = JSON.parse(localStorage.getItem(LS) || 'null'); } catch {}
-const sapp = document.getElementById('sapp');
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-function renderJoin() {
-  sapp.innerHTML = \`
-  <form class="card" id="joinForm" style="max-width:380px">
-    <label>Your name</label>
-    <input type="text" id="nameInput" maxlength="40" autofocus required>
-    <div class="btn-row"><button class="btn">Continue</button></div>
-  </form>\`;
-  document.getElementById('joinForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('nameInput').value.trim();
-    if (!name) return;
-    const r = await fetch('/api/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
-    if (r.ok) { player = await r.json(); localStorage.setItem(LS, JSON.stringify(player)); renderForm(); }
-  };
-}
-
-function renderForm() {
-  sapp.innerHTML = \`
-  <div id="sflash"></div>
-  <form class="card" id="sugForm">
-    <label>Your question</label>
-    <div class="qcompose">
-      <span class="qword">Name</span>
-      <input type="number" id="sugNum" value="1" min="1" max="10" required class="qnum">
-      <input type="text" id="sugThing" required maxlength="280" class="qthing" placeholder="NLP researchers">
-    </div>
-    <div class="btn-row"><button class="btn">Submit question</button></div>
-  </form>\`;
-  document.getElementById('sugForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const thing = document.getElementById('sugThing').value.trim();
-    const num = Number(document.getElementById('sugNum').value) || 1;
-    if (!thing) return;
-    const r = await fetch('/api/suggest', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ player_id: player.player_id, num, thing }) });
-    const flash = document.getElementById('sflash');
-    if (r.ok) {
-      flash.innerHTML = '<div class="flash ok">Thanks! “Name ' + num + ' ' + esc(thing) + '” is in the queue.</div>';
-      document.getElementById('sugThing').value = '';
-    } else if (r.status === 403) {
-      // Game was reset — this identity no longer exists, start over.
-      localStorage.removeItem(LS);
-      player = null;
-      renderJoin();
-    } else {
-      const j = await r.json().catch(() => ({}));
-      flash.innerHTML = '<div class="flash err">' + esc(j.error || 'Something went wrong.') + '</div>';
-    }
-  };
-}
-
-player ? renderForm() : renderJoin();
 `;
 
 // ---------------------------------------------------------------------------

@@ -186,6 +186,9 @@ tr.me td { color: var(--honey); font-weight: 700; }
   border-radius: 0; font-weight: 800; padding: 2px 6px; text-shadow: none;
 }
 .cluster .members { color: var(--muted); font-size: 0.82em; }
+.twocol { display: flex; gap: 10px; align-items: flex-start; }
+.twocol > .card { flex: 1; min-width: 0; }
+.twocol .cluster { overflow-wrap: anywhere; padding: 7px 6px; gap: 8px; }
 .countdown { font-variant-numeric: tabular-nums; color: var(--honey); font-weight: 800; text-shadow: 0 0 8px rgba(255,176,0,0.4); }
 .pill {
   display: inline-block; font-size: 0.82em; font-weight: 700;

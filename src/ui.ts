@@ -214,6 +214,10 @@ tr.me td { color: var(--honey); font-weight: 700; }
   font-size: 0.9em;
 }
 .namebadge:hover { background: var(--panel2); }
+.namebadge.leave {
+  top: 48px; color: var(--muted); border-color: var(--muted);
+  font-size: 0.75em; padding: 3px 10px;
+}
 .statgrid { display: flex; gap: 14px; flex-wrap: wrap; }
 .stat { background: #000; border: 1px solid var(--muted); border-radius: 0; padding: 10px 18px; text-align: center; }
 .stat .n { font-size: 1.6em; font-weight: 800; color: var(--honey); }

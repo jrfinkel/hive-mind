@@ -258,6 +258,19 @@ app.post("/api/suggest", async (c) => {
   return c.json({ ok: true });
 });
 
+app.post("/api/leave", async (c) => {
+  const { player_id } = await c.req.json<{ player_id?: string }>();
+  if (player_id) {
+    // Drop out of the active count right away; answers/scores stay.
+    await c.env.DB.prepare("UPDATE players SET last_seen = 0 WHERE id = ?")
+      .bind(player_id)
+      .run();
+  }
+  // Expire the player-password cookie so /play shows the password page again.
+  c.header("Set-Cookie", "hm_player=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+  return c.json({ ok: true });
+});
+
 app.post("/api/vote", async (c) => {
   const body = await c.req.json<{ player_id?: string; suggestion_id?: number; vote?: number }>();
   const vote = Number(body.vote);
@@ -301,6 +314,7 @@ app.get("/play", (c) =>
     layout({
       title: "Play",
       body: `<div id="nameBadge" class="namebadge" style="display:none" title="Tap to change your name"></div>
+<div id="leaveBtn" class="namebadge leave" style="display:none">[ leave game ]</div>
 <div id="app"><p class="muted">Loading…</p></div>`,
       script: PLAY_JS,
     })
@@ -947,9 +961,20 @@ function renderJoin() {
 
 function updateBadge() {
   const badge = document.getElementById('nameBadge');
-  if (!player) { badge.style.display = 'none'; return; }
+  const leave = document.getElementById('leaveBtn');
+  if (!player) { badge.style.display = 'none'; leave.style.display = 'none'; return; }
   badge.textContent = '> ' + player.name;
   badge.style.display = 'block';
+  leave.style.display = 'block';
+  leave.onclick = async () => {
+    if (!window.confirm('Leave the game?')) return;
+    try {
+      await fetch('/api/leave', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ player_id: player.player_id }) });
+    } catch {}
+    localStorage.removeItem(LS);
+    location.href = '/play';
+  };
   badge.onclick = async () => {
     const name = (window.prompt('New name:', player.name) || '').trim();
     if (!name || name === player.name) return;

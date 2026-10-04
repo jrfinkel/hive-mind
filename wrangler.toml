@@ -28,3 +28,31 @@ ADMIN_PASSWORD = "lundard-boss"
 # Players need this to reach /play and /suggest. The /board page advertises a
 # play link with this baked in (?pw=...), so people in the room never type it.
 PLAYER_PASSWORD = "lundard"
+THEME = "hive"
+
+# ---------------------------------------------------------------------------
+# Second copy of the game: same code, own DB, own URL, kitschy mountain skin.
+#   deploy:      npx wrangler deploy --env bearplane
+#   migrations:  npx wrangler d1 migrations apply bear-plane-db --remote --env bearplane
+# (plain `npx wrangler deploy` still deploys hive-mind)
+# ---------------------------------------------------------------------------
+[env.bearplane]
+name = "bear-plane"
+workers_dev = true
+
+[[env.bearplane.d1_databases]]
+binding = "DB"
+database_name = "bear-plane-db"
+database_id = "dc977da9-8fdd-4615-b2ab-0449da79aa00"
+migrations_dir = "migrations"
+
+[env.bearplane.ai]
+binding = "AI"
+
+[env.bearplane.assets]
+directory = "./public"
+
+[env.bearplane.vars]
+ADMIN_PASSWORD = "flyboss"
+PLAYER_PASSWORD = "fly"
+THEME = "bearplane"

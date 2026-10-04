@@ -16,13 +16,15 @@ export const BANNER = String.raw`
 |_| |_|___|  \_/  |_____||_|  |_|___|_| \_|____/
 `.replace(/^\n/, "");
 
+import type { Theme } from "./theme";
+
 /**
- * Fixed background layer of star-cropped faces (public/faces/star*.png).
- * Spots mostly hug the viewport edges so the centered content column stays
- * readable; opaque cards hide whatever sits under them. There are more face
- * images than spots, so each page load samples a random subset.
+ * Fixed background layer of scatter art (star-cropped faces for hive,
+ * framed vintage posters for bearplane — see theme.ts). Spots mostly hug the
+ * viewport edges so the centered content column stays readable; opaque cards
+ * hide whatever sits under them. Each page load shuffles the image set; if
+ * there are fewer images than spots, images repeat.
  */
-const FACE_COUNT = 37;
 // Jittered 7x4 grid over the whole viewport; center spots sit behind the
 // opaque cards/panels, so they only peek out around the content.
 const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [
@@ -55,17 +57,17 @@ const FACE_SPOTS: Array<[pos: string, top: string, w: number]> = [
   ["left:81%", "top:83%", 130],
   ["left:94%", "top:79%", 150],
 ];
-function faceLayer(): string {
-  const ids = Array.from({ length: FACE_COUNT }, (_, i) => i);
-  for (let i = ids.length - 1; i > 0; i--) {
+function faceLayer(theme: Theme): string {
+  const imgs = [...theme.bgImages];
+  for (let i = imgs.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [ids[i], ids[j]] = [ids[j], ids[i]];
+    [imgs[i], imgs[j]] = [imgs[j], imgs[i]];
   }
   return (
     `<div class="facestars" aria-hidden="true">` +
     FACE_SPOTS.map(
       ([pos, top, w], i) =>
-        `<img src="/faces/star${ids[i]}.png" alt="" style="${pos};${top};width:${w}px">`
+        `<img src="${imgs[i % imgs.length]}" alt="" style="${pos};${top};width:${Math.round(w * theme.bgScale)}px">`
     ).join("") +
     `</div>`
   );
@@ -75,17 +77,19 @@ export function layout(o: {
   title: string;
   body: string;
   script?: string;
+  theme: Theme;
 }): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(o.title)} · HIVE MIND</title>
-<style>${CSS}</style>
+<title>${esc(o.title)} · ${esc(o.theme.title)}</title>
+${o.theme.headExtra}
+<style>${CSS}${o.theme.cssExtra}</style>
 </head>
 <body>
-${faceLayer()}
+${faceLayer(o.theme)}
 <main id="content">${o.body}</main>
 ${o.script ? `<script>${o.script}</script>` : ""}
 </body>

@@ -3,6 +3,8 @@ export type Env = {
   AI: Ai;
   ADMIN_PASSWORD: string;
   PLAYER_PASSWORD: string;
+  /** Picks the skin (see src/theme.ts): "hive" (default) or "bearplane". */
+  THEME?: string;
 };
 
 export type Round = {

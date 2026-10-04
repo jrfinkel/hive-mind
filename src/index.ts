@@ -3,7 +3,8 @@ import type { Context } from "hono";
 import type { Env, Round } from "./types";
 import { now } from "./types";
 import { renderSVG } from "uqr";
-import { layout, esc, BANNER } from "./ui";
+import { layout, esc } from "./ui";
+import { getTheme } from "./theme";
 import { scoreRound } from "./scoring";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -61,9 +62,10 @@ async function playerGate(c: C, next: () => Promise<void>) {
   const err = c.req.query("pw") !== undefined ? `<div class="flash err">Wrong password.</div>` : "";
   return c.html(
     layout({
+      theme: getTheme(c.env),
       title: "Password",
       body: `<div class="center"><form class="card" style="max-width:360px;margin:40px auto" method="get">
-  <h1>Hive Mind</h1>${err}
+  <h1>${esc(getTheme(c.env).title)}</h1>${err}
   <label>Password</label>
   <input type="password" name="pw" autofocus>
   <div class="btn-row"><button class="btn" type="submit" style="width:100%">Enter</button></div>
@@ -210,10 +212,11 @@ async function roundClusters(env: Env, roundId: number): Promise<ClusterRow[]> {
 app.get("/", (c) =>
   c.html(
     layout({
+      theme: getTheme(c.env),
       title: "Home",
       body: `
 <div class="center" style="margin-top:40px">
-  <pre class="banner" style="display:inline-block;text-align:left">${BANNER}</pre>
+  ${getTheme(c.env).bannerHtml}
   <div class="btn-row" style="justify-content:center;margin-top:26px">
     <a class="btn" href="/play">Player</a>
     <a class="btn secondary" href="/board">Board</a>
@@ -302,11 +305,14 @@ app.post("/api/vote", async (c) => {
 app.get("/play", (c) =>
   c.html(
     layout({
+      theme: getTheme(c.env),
       title: "Play",
       body: `<div id="nameBadge" class="namebadge" style="display:none" title="Tap to change your name"></div>
 <div id="leaveBtn" class="namebadge leave" style="display:none">[ leave game ]</div>
 <div id="app"><p class="muted">Loading…</p></div>`,
-      script: PLAY_JS,
+      script:
+        `const SUGGEST_PH = ${JSON.stringify(getTheme(c.env).suggestPlaceholder)};\n` +
+        PLAY_JS,
     })
   )
 );
@@ -320,10 +326,11 @@ app.get("/board", (c) => {
   const qrSvg = renderSVG(playUrl, { ecc: "M", border: 2 });
   return c.html(
     layout({
+      theme: getTheme(c.env),
       title: "Big screen",
       body: `<style>main{max-width:1600px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
       script:
-        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_TXT = ${JSON.stringify(BANNER)};\nconst QR_SVG = ${JSON.stringify(qrSvg)};\n` +
+        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_HTML = ${JSON.stringify(getTheme(c.env).bannerHtml)};\nconst QR_SVG = ${JSON.stringify(qrSvg)};\n` +
         BOARD_JS,
     })
   );
@@ -530,6 +537,7 @@ app.get("/results", async (c) => {
 
   return c.html(
     layout({
+      theme: getTheme(c.env),
       title: "Results",
       body,
       // Auto-refresh so a projector copy stays current between rounds.
@@ -571,6 +579,7 @@ ${
 }`;
   return c.html(
     layout({
+      theme: getTheme(c.env),
       title: "Leaderboard",
       body,
       script: `setInterval(async () => {
@@ -626,6 +635,7 @@ app.get("/admin", async (c) => {
     const err = c.req.query("e") ? `<div class="flash err">Wrong password.</div>` : "";
     return c.html(
       layout({
+        theme: getTheme(c.env),
         title: "Admin sign in",
         body: `<div class="center"><form class="card" style="max-width:360px;margin:40px auto" method="post" action="/admin/login">
   <h1>Admin</h1>${err}
@@ -720,7 +730,7 @@ ${roundCard}
     <div class="qcompose">
       <span class="qword">Name</span>
       <input type="number" name="num" value="3" min="1" max="10" class="qnum">
-      <input type="text" name="thing" maxlength="280" class="qthing" placeholder="NLP researchers">
+      <input type="text" name="thing" maxlength="280" class="qthing" placeholder="${esc(getTheme(c.env).suggestPlaceholder)}">
     </div>
     <div class="btn-row"><button class="btn">Add to queue</button></div>
   </form>
@@ -807,7 +817,7 @@ async function poll(){
 }
 poll(); setInterval(poll,2000);`;
 
-  return c.html(layout({ title: "Admin", body, script }));
+  return c.html(layout({ theme: getTheme(c.env), title: "Admin", body, script }));
 });
 
 app.get("/api/admin/state", async (c) => {
@@ -1179,7 +1189,7 @@ function renderSuggestions(s) {
       '<form id="sugForm" class="qcompose" style="margin-top:12px">' +
         '<span class="qword">Name</span>' +
         '<input type="number" id="sugNum" value="3" min="1" max="10" class="qnum">' +
-        '<input type="text" id="sugThing" maxlength="280" class="qthing" placeholder="NLP researchers">' +
+        '<input type="text" id="sugThing" maxlength="280" class="qthing" placeholder="' + SUGGEST_PH + '">' +
         '<button class="btn sm">Add</button>' +
       '</form><div id="sugMsg"></div></div>';
     sugListKey = '';
@@ -1257,7 +1267,7 @@ let viewKey = '', countdownTimer = null;
 const joinHint = '<div class="bjoinrow">' +
   '<p class="bjoin">&gt;&gt; join the game: <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a> &lt;&lt;</p>' +
   '<div class="bqr">' + QR_SVG + '</div></div>';
-const bannerHtml = '<pre class="banner">' + BANNER_TXT + '</pre>';
+const bannerHtml = BANNER_HTML;
 
 function startCountdown(closesAt) {
   clearInterval(countdownTimer);

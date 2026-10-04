@@ -121,6 +121,12 @@ body::before {
 /* Star-cropped face scatter behind everything */
 .facestars { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
 .facestars img { position: absolute; opacity: 0.18; }
+/* Phones: the desktop scatter overlaps badly at ~400px wide — keep every
+   third star and shrink them. */
+@media (max-width: 700px) {
+  .facestars img { width: 100px !important; }
+  .facestars img:nth-child(3n+1), .facestars img:nth-child(3n) { display: none; }
+}
 main, .namebadge { position: relative; z-index: 1; }
 a { color: var(--ink); }
 main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }

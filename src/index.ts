@@ -719,8 +719,8 @@ ${roundCard}
   <form id="custom" method="post" action="/admin/suggest">
     <div class="qcompose">
       <span class="qword">Name</span>
-      <input type="number" name="num" value="1" min="1" max="10" class="qnum">
-      <input type="text" name="thing" maxlength="280" class="qthing" placeholder="important NLP researchers">
+      <input type="number" name="num" value="3" min="1" max="10" class="qnum">
+      <input type="text" name="thing" maxlength="280" class="qthing" placeholder="NLP researchers">
     </div>
     <div class="btn-row"><button class="btn">Add to queue</button></div>
   </form>
@@ -873,13 +873,28 @@ app.post("/admin/open", async (c) => {
   if (!thing) return c.redirect("/admin");
 
   const t = now();
-  await c.env.DB.batch([
+  const stmts: D1PreparedStatement[] = [];
+  const wasOver = !!(await c.env.DB.prepare(
+    "SELECT v FROM meta WHERE k = 'game_over'"
+  ).first());
+  if (wasOver) {
+    // First question after "End game" starts a fresh game: wipe all scores
+    // and round history, keep players and the suggestion queue.
+    stmts.push(
+      c.env.DB.prepare("DELETE FROM answers"),
+      c.env.DB.prepare("DELETE FROM clusters"),
+      c.env.DB.prepare("DELETE FROM rounds"),
+      c.env.DB.prepare(
+        "DELETE FROM meta WHERE k IN ('last_results', 'leaderboard', 'round_ranks', 'overall_ranks', 'game_over')"
+      )
+    );
+  }
+  stmts.push(
     c.env.DB.prepare(
       "INSERT INTO rounds (question, num, suggestion_id, status, opened_at, closes_at) VALUES (?, ?, ?, 'open', ?, ?)"
-    ).bind(composeQuestion(num, thing), num, suggestionId, t, minutes > 0 ? t + minutes * 60 : null),
-    // A new question resumes play if the game had been ended.
-    c.env.DB.prepare("DELETE FROM meta WHERE k = 'game_over'"),
-  ]);
+    ).bind(composeQuestion(num, thing), num, suggestionId, t, minutes > 0 ? t + minutes * 60 : null)
+  );
+  await c.env.DB.batch(stmts);
   sharedCache = null;
   return c.redirect("/admin");
 });
@@ -1081,7 +1096,7 @@ function startCountdown(closesAt) {
 
 function render() {
   const s = state;
-  const key = [s.status, s.round && s.round.id, s.answered, s.last && s.last.id].join(':');
+  const key = [s.status, s.round && s.round.id, s.answered, s.last && s.last.id, s.finale ? 'F' : ''].join(':');
   const countEl = document.getElementById('liveCount');
   if (countEl && s.answer_count != null) countEl.textContent = s.answer_count;
   if (key === viewKey) return;
@@ -1133,6 +1148,17 @@ function render() {
     app.innerHTML = \`
       <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p></div>
       <div id="sugSection"></div>\`;
+  } else if (s.finale) {
+    const lb = s.leaderboard || [];
+    const rows = lb.map((r, i) =>
+      \`<tr\${i < 3 ? ' class="me"' : ''}><td>\${['#1','#2','#3'][i] ?? '#' + (i + 1)}</td><td>\${esc(r.name)}</td><td><strong>\${r.pts}</strong></td></tr>\`).join('');
+    const p = s.your_place || {};
+    app.innerHTML = \`
+      <div class="card center"><p class="big blink">GAME OVER</p></div>
+      <h2>Final standings</h2>
+      <div class="card"><table>\${rows || '<tr><td class="muted">No scores.</td></tr>'}</table></div>
+      \${p.overall ? '<div class="statgrid" style="justify-content:center;margin:14px 0"><div class="stat"><div class="n">#' + p.overall + '</div><div class="l">your place</div></div></div>' : ''}
+      <div id="sugSection"></div>\`;
   } else {
     app.innerHTML = \`
       <div class="card center"><p class="big blink">AWAITING NEXT QUESTION</p></div>
@@ -1152,7 +1178,7 @@ function renderSuggestions(s) {
       '<div id="voteList"></div>' +
       '<form id="sugForm" class="qcompose" style="margin-top:12px">' +
         '<span class="qword">Name</span>' +
-        '<input type="number" id="sugNum" value="1" min="1" max="10" class="qnum">' +
+        '<input type="number" id="sugNum" value="3" min="1" max="10" class="qnum">' +
         '<input type="text" id="sugThing" maxlength="280" class="qthing" placeholder="NLP researchers">' +
         '<button class="btn sm">Add</button>' +
       '</form><div id="sugMsg"></div></div>';

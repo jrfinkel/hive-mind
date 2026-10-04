@@ -35,10 +35,11 @@ const HIVE: Theme = {
   bgScale: 1,
 };
 
+// Named "bear-plane" only in the URL/worker; the game is still HIVE MIND.
 const BEARPLANE: Theme = {
   key: "bearplane",
-  title: "BEAR PLANE",
-  bannerHtml: `<div class="bpmark" aria-label="Bear Plane"><span class="bpword">BEAR</span><span class="bpicon">✈</span><span class="bpword alt">PLANE</span></div>`,
+  title: "HIVE MIND",
+  bannerHtml: `<div class="bpmark" aria-label="Hive Mind"><span class="bpword">HIVE</span><span class="bpicon">✈</span><span class="bpword alt">MIND</span></div>`,
   suggestPlaceholder: "mountain towns",
   headExtra:
     `<link rel="preconnect" href="https://fonts.googleapis.com">` +

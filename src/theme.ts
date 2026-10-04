@@ -125,8 +125,16 @@ input:focus, textarea:focus, select:focus { border-color: var(--honey); }
 .board .bjoin strong { text-shadow: none; }
 /* Background posters hang like framed airport-wall art */
 .facestars img {
-  opacity: 0.5; border: 7px solid #fffdf4; border-radius: 4px;
+  opacity: 0.35; border: 7px solid #fffdf4; border-radius: 4px;
   box-shadow: 0 5px 14px rgba(60, 40, 20, 0.4); background: #fffdf4;
+}
+/* Cream veil over the content column so text on top of posters stays
+   readable; posters near the edges keep their punch. */
+.facestars::after {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(ellipse 55% 90% at 50% 45%,
+    rgba(243, 234, 215, 0.85) 0%, rgba(243, 234, 215, 0.35) 58%,
+    rgba(243, 234, 215, 0) 78%);
 }
 .facestars img[src$=".png"] {
   border: none; background: transparent; border-radius: 50%; box-shadow: none;
@@ -145,7 +153,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--honey); }
   72%  { filter: brightness(1.1); box-shadow: 0 0 26px 8px rgba(255, 160, 55, 0.6), 0 5px 14px rgba(60, 40, 20, 0.4); }
   86%  { filter: brightness(1.02); box-shadow: 0 0 18px 4px rgba(255, 145, 42, 0.45), 0 5px 14px rgba(60, 40, 20, 0.4); }
 }
-.facestars img[src*="bpfire"] { opacity: 0.62; animation: crackle 3.1s ease-in-out infinite; }
+.facestars img[src*="bpfire"] { opacity: 0.5; animation: crackle 3.1s ease-in-out infinite; }
 .facestars img[src*="bpfire"]:nth-child(2n)  { animation-duration: 2.3s; animation-delay: -0.9s; }
 .facestars img[src*="bpfire"]:nth-child(3n)  { animation-duration: 3.7s; animation-delay: -1.6s; }
 /* Wooden-sign title mark */

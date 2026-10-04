@@ -49,11 +49,9 @@ const BEARPLANE: Theme = {
     ...Array.from({ length: 10 }, (_, i) => `/bearplane/bp${i}.jpg`),
     "/bearplane/bp10.png",
     "/bearplane/bp11.jpg",
-    // Fireplaces — these get the crackling-fire flicker animation (CSS
-    // below matches on "bpfire" in the src).
-    "/bearplane/bpfire0.jpg",
-    "/bearplane/bpfire1.jpg",
-    "/bearplane/bpfire2.jpg",
+    // Sandblasted wooden signboards, like the ones by BZN baggage claim
+    // (styled without the poster frame — CSS matches "bpsign" in the src).
+    ...Array.from({ length: 6 }, (_, i) => `/bearplane/bpsign${i}.jpg`),
   ],
   bgScale: 1.3,
   // Kitschy mountain-lodge reskin (think Bozeman Yellowstone airport decor):
@@ -143,19 +141,11 @@ input:focus, textarea:focus, select:focus { border-color: var(--honey); }
 .facestars img:nth-child(4n+1) { transform: rotate(2.5deg); }
 .facestars img:nth-child(4n+2) { transform: rotate(-1.5deg); }
 .facestars img:nth-child(4n+3) { transform: rotate(3deg); }
-/* Crackling fireplaces: uneven brightness flicker + pulsing ember glow */
-@keyframes crackle {
-  0%, 100% { filter: brightness(1); box-shadow: 0 0 16px 3px rgba(255, 140, 40, 0.4), 0 5px 14px rgba(60, 40, 20, 0.4); }
-  13%  { filter: brightness(1.14); box-shadow: 0 0 30px 9px rgba(255, 165, 60, 0.65), 0 5px 14px rgba(60, 40, 20, 0.4); }
-  26%  { filter: brightness(1.04); box-shadow: 0 0 20px 5px rgba(255, 150, 45, 0.5), 0 5px 14px rgba(60, 40, 20, 0.4); }
-  41%  { filter: brightness(1.18); box-shadow: 0 0 34px 11px rgba(255, 175, 70, 0.7), 0 5px 14px rgba(60, 40, 20, 0.4); }
-  57%  { filter: brightness(0.97); box-shadow: 0 0 14px 3px rgba(255, 135, 35, 0.35), 0 5px 14px rgba(60, 40, 20, 0.4); }
-  72%  { filter: brightness(1.1); box-shadow: 0 0 26px 8px rgba(255, 160, 55, 0.6), 0 5px 14px rgba(60, 40, 20, 0.4); }
-  86%  { filter: brightness(1.02); box-shadow: 0 0 18px 4px rgba(255, 145, 42, 0.45), 0 5px 14px rgba(60, 40, 20, 0.4); }
+/* Carved wooden signboards hang as-is — no poster frame, deeper shadow */
+.facestars img[src*="bpsign"] {
+  border: none; background: transparent; border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(60, 40, 20, 0.5); opacity: 0.45;
 }
-.facestars img[src*="bpfire"] { opacity: 0.5; animation: crackle 3.1s ease-in-out infinite; }
-.facestars img[src*="bpfire"]:nth-child(2n)  { animation-duration: 2.3s; animation-delay: -0.9s; }
-.facestars img[src*="bpfire"]:nth-child(3n)  { animation-duration: 3.7s; animation-delay: -1.6s; }
 /* Wooden-sign title mark */
 .bpmark {
   display: inline-flex; align-items: center; gap: 0.35em;

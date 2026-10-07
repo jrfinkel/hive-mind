@@ -233,6 +233,7 @@ async function clusterWithAI(
           "When unsure, keep answers separate. " +
           "Label each group with the most common phrasing among its answers — never a category name. " +
           "Every answer id must appear in exactly one group; an answer with no match is its own group of one. " +
+          'NEVER create a catch-all group (e.g. "no match", "other", "misc") — unmatched answers each get their own single-id group. ' +
           'Reply with ONLY valid JSON: {"clusters":[{"label":"most common phrasing","ids":[1,2]}]}',
       },
       {
@@ -293,26 +294,41 @@ export function clusterExact(answers: Answer[]): ClusterDraft[] {
   return [...groups.values()];
 }
 
+/** The model sometimes invents a catch-all bucket despite the prompt. Those
+ * members didn't actually match anyone, so they must not score as one big
+ * cluster (in a 150-person round that catch-all would top the board!). */
+const JUNK_LABEL =
+  /^(no ?match(es)?|none|n\/?a|nothing|other|others|misc(ellaneous)?|unmatched|ungrouped|unique|singletons?|no group|leftovers?)$/i;
+
 /**
- * Make model output safe: drop unknown/duplicate ids, give any unassigned
- * answer its own singleton cluster, drop empty clusters.
+ * Make model output safe: drop unknown/duplicate ids and empty clusters;
+ * explode catch-all buckets; group every unassigned answer by exact
+ * (normalized) text so identical answers still score together.
  */
 function sanitize(clusters: ClusterDraft[], answers: Answer[]): ClusterDraft[] {
   const valid = new Map(answers.map((a) => [a.id, a]));
   const seen = new Set<number>();
   const out: ClusterDraft[] = [];
+  const strays: Answer[] = [];
   for (const cl of clusters) {
     const ids = (Array.isArray(cl.ids) ? cl.ids : [])
       .map(Number)
       .filter((id) => valid.has(id) && !seen.has(id));
     ids.forEach((id) => seen.add(id));
-    if (ids.length) {
-      out.push({ label: String(cl.label ?? "").trim() || valid.get(ids[0])!.text, ids });
+    if (!ids.length) continue;
+    const label = String(cl.label ?? "").trim();
+    if (JUNK_LABEL.test(label)) {
+      strays.push(...ids.map((id) => valid.get(id)!));
+    } else {
+      out.push({ label: label || valid.get(ids[0])!.text, ids });
     }
   }
   for (const a of answers) {
-    if (!seen.has(a.id)) out.push({ label: a.text.trim(), ids: [a.id] });
+    if (!seen.has(a.id)) strays.push(a);
   }
+  // Exact-text grouping (not one singleton per answer): eight people who all
+  // wrote "bad wifi" should score 8 together even if the model skipped them.
+  out.push(...clusterExact(strays));
   out.sort((x, y) => y.ids.length - x.ids.length);
   return out;
 }

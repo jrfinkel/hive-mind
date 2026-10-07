@@ -220,6 +220,7 @@ app.get("/", (c) =>
   ${getTheme(c.env).bannerHtml}
   <div class="btn-row" style="justify-content:center;margin-top:26px">
     <a class="btn" href="/play">Player</a>
+    <a class="btn secondary" href="/welcome">Welcome</a>
     <a class="btn secondary" href="/board">Board</a>
     <a class="btn secondary" href="/admin">Admin</a>
   </div>

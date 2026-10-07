@@ -13,6 +13,7 @@ and account as fuse.
 | URL            | Who      | What |
 |----------------|----------|------|
 | `/`            | everyone | Landing page with links |
+| `/welcome`     | everyone | Big QR code to join + how-to-play instructions |
 | `/suggest`     | everyone | Submit question ideas (go into the admin queue) |
 | `/play`        | players  | Join with a name, answer live questions, see your score |
 | `/results`     | everyone | Top answers + counts per question; auto-refreshes (projector-friendly) |

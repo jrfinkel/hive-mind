@@ -329,10 +329,51 @@ app.get("/board", (c) => {
     layout({
       theme: getTheme(c.env),
       title: "Big screen",
-      body: `<style>main{max-width:1600px}</style><div id="app" class="board"><p class="muted">Loading…</p></div>`,
+      body: `<style>main{max-width:1600px}</style>
+<div class="bqr-corner">${qrSvg}<div class="l">scan to join</div></div>
+<div id="app" class="board"><p class="muted">Loading…</p></div>`,
       script:
-        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_HTML = ${JSON.stringify(getTheme(c.env).bannerHtml)};\nconst QR_SVG = ${JSON.stringify(qrSvg)};\n` +
+        `const PLAY_URL = ${JSON.stringify(playUrl)};\nconst BANNER_HTML = ${JSON.stringify(getTheme(c.env).bannerHtml)};\n` +
         BOARD_JS,
+    })
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Welcome: hand this to the room — big QR to join, how to play, board link.
+// ---------------------------------------------------------------------------
+
+app.get("/welcome", (c) => {
+  const origin = new URL(c.req.url).origin;
+  const playUrl = `${origin}/play`;
+  const qrSvg = renderSVG(playUrl, { ecc: "M", border: 2 });
+  const theme = getTheme(c.env);
+  return c.html(
+    layout({
+      theme,
+      title: "Welcome",
+      body: `
+<div class="center welcome" style="margin-top:28px">
+  ${theme.bannerHtml}
+  <div class="card wqr">
+    ${qrSvg}
+    <p class="big" style="margin:12px 0 0">scan to play — or go to <a href="${playUrl}"><strong>${esc(playUrl.replace(/^https?:\/\//, ""))}</strong></a></p>
+  </div>
+  <div class="card wrules">
+    <h2>How to play</h2>
+    <ol>
+      <li>Join with your name, then wait for the host to open a question.</li>
+      <li>Every question asks you to <strong>name N things</strong> — fill in all N boxes with different answers before the round closes.</li>
+      <li>Answers that mean the same thing count together (&quot;NYC&quot; = &quot;New York City&quot;). Each of your answers earns one point per player who gave a matching answer — including you.</li>
+      <li>So don't be clever: write what you think <strong>most people</strong> will write.</li>
+      <li>Between rounds, suggest questions and vote on other players' ideas.</li>
+    </ol>
+  </div>
+  <div class="btn-row" style="justify-content:center">
+    <a class="btn" href="/play">Join the game</a>
+    <a class="btn secondary" href="/board">Open the board</a>
+  </div>
+</div>`,
     })
   );
 });
@@ -1303,7 +1344,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 let viewKey = '', countdownTimer = null;
 const joinHint = '<div class="bjoinrow">' +
   '<p class="bjoin">&gt;&gt; join the game: <a href="' + PLAY_URL + '"><strong>' + PLAY_URL.replace(/^https?:\\/\\//, '') + '</strong></a> &lt;&lt;</p>' +
-  '<div class="bqr">' + QR_SVG + '</div></div>';
+  '</div>';
 const bannerHtml = BANNER_HTML;
 
 function startCountdown(closesAt) {

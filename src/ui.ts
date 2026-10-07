@@ -259,7 +259,11 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .board .bstats .l { font-size: 1em; }
 .board .bjoinrow { display: flex; gap: 22px; align-items: center; justify-content: center; margin-top: 14px; }
 .board .bjoin { color: var(--muted); font-size: 1.1em; margin: 0; text-transform: uppercase; letter-spacing: 0.06em; }
-.board .bqr svg { width: 128px; height: 128px; display: block; }
+/* QR pinned to the upper-right corner, next to the title banner */
+.bqr-corner { position: fixed; top: 14px; right: 16px; z-index: 5; text-align: center; }
+.bqr-corner svg { width: 128px; height: 128px; display: block; }
+.bqr-corner .l { font-size: 0.72em; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 3px; }
+@media (max-width: 700px) { .bqr-corner svg { width: 84px; height: 84px; } }
 .board .bjoin a { text-decoration: none; }
 .board .bjoin strong { color: var(--honey); text-shadow: 0 0 8px rgba(255,176,0,0.4); text-transform: none; }
 .board .bcols { display: flex; gap: 14px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
@@ -302,4 +306,12 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .board .pspot.first .pmedal { color: var(--honey); font-size: 1.3em; }
 .board .pspot.first .pname { font-size: 2.6em; color: var(--honey); text-shadow: 0 0 10px rgba(255,176,0,0.45); }
 .board .pspot.first .ppts { font-size: 1.5em; }
+
+/* Welcome page (/welcome): big QR + instructions */
+.welcome .wqr { display: inline-block; padding: 22px 26px; }
+.welcome .wqr svg { width: min(68vw, 360px); height: auto; display: block; margin: 0 auto; }
+.welcome .wrules { text-align: left; max-width: 640px; margin: 14px auto; }
+.welcome .wrules h2 { margin-top: 0; }
+.welcome .wrules ol { margin: 0; padding-left: 1.4em; }
+.welcome .wrules li { margin: 9px 0; }
 `;

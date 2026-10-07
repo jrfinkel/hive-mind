@@ -270,6 +270,16 @@ tr.me td { color: var(--honey); font-weight: 700; }
 }
 .board .bpanel h2 { margin-top: 0; color: var(--honey); font-size: 1.05em; }
 .board .bcluster { display: flex; gap: 12px; align-items: center; font-size: 1.2em; padding: 5px 0; }
+.board .bcluster .bclab { flex: none; }
+/* What people actually typed: one line, clipped to the panel width —
+   available space dictates how many strings show. */
+.board .bcluster .bctexts {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; color: var(--muted); font-size: 0.68em;
+}
+.board .bmore { margin: 8px 0 2px; font-size: 0.85em; }
+.board .bmore a { color: var(--muted); text-decoration: none; }
+.board .bmore a:hover { color: var(--ink); }
 .board .bcluster .count {
   min-width: 2em; text-align: center; background: var(--honey); color: #000;
   border-radius: 0; font-weight: 800; padding: 2px 6px; font-size: 0.9em; text-shadow: none;

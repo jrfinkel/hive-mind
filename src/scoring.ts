@@ -146,10 +146,27 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
       .bind(roundId)
       .first<{ question: string }>();
     const { results: cls } = await env.DB.prepare(
-      "SELECT label, size FROM clusters WHERE round_id = ? ORDER BY size DESC, id LIMIT 10"
+      "SELECT id, label, size FROM clusters WHERE round_id = ? ORDER BY size DESC, id LIMIT 10"
     )
       .bind(roundId)
-      .all<{ label: string; size: number }>();
+      .all<{ id: number; label: string; size: number }>();
+    // Top exact strings per cluster (by how often that exact text appeared),
+    // so the board can show what people actually typed.
+    const { results: texts } = await env.DB.prepare(
+      `SELECT cluster_id, text, COUNT(*) AS n FROM answers
+       WHERE round_id = ? AND cluster_id IS NOT NULL
+       GROUP BY cluster_id, text ORDER BY n DESC, text`
+    )
+      .bind(roundId)
+      .all<{ cluster_id: number; text: string; n: number }>();
+    const textsByCluster = new Map<number, string[]>();
+    for (const t of texts) {
+      const arr = textsByCluster.get(t.cluster_id) ?? [];
+      if (arr.length < 6) {
+        arr.push(t.text);
+        textsByCluster.set(t.cluster_id, arr);
+      }
+    }
     const total = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM answers WHERE round_id = ?"
     )
@@ -180,7 +197,11 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
           id: roundId,
           question: round?.question ?? "",
           total_answers: total?.n ?? 0,
-          clusters: cls,
+          clusters: cls.map((c) => ({
+            label: c.label,
+            size: c.size,
+            texts: textsByCluster.get(c.id) ?? [],
+          })),
           top: roundTop,
         })
       )
@@ -298,7 +319,7 @@ export function clusterExact(answers: Answer[]): ClusterDraft[] {
  * members didn't actually match anyone, so they must not score as one big
  * cluster (in a 150-person round that catch-all would top the board!). */
 const JUNK_LABEL =
-  /^(no ?match(es)?|none|n\/?a|nothing|other|others|misc(ellaneous)?|unmatched|ungrouped|unique|singletons?|no group|leftovers?)$/i;
+  /^(none|n\/?a|nothing|others?|misc(ellaneous)?|unique|singletons?)$|no ?match|unmatched|ungrouped|no group|leftovers?|catch[- ]?all|not the same|unrelated|do(es)? ?n[o']t match/i;
 
 /**
  * Make model output safe: drop unknown/duplicate ids and empty clusters;

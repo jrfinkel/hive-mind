@@ -1310,7 +1310,9 @@ function scoreTableHtml(title, rows) {
 }
 
 function suggestionsHtml(s) {
-  const sugs = (s.suggestions || []).slice(0, 5);
+  // Same row count as the other panels, so a full queue fills the column;
+  // with fewer suggestions the panel just stays shorter.
+  const sugs = (s.suggestions || []).slice(0, 8);
   if (!sugs.length) return '';
   return '<div class="bpanel"><h2>Top suggestions</h2>' +
     sugs.map(g =>
@@ -1366,13 +1368,16 @@ function render(s) {
       <div class="bq">\${esc(s.round.question)}</div>
       <div class="bcd blink">SCORING</div>\`;
   } else if (s.last) {
-    const clusters = (s.last.clusters || []).slice(0, 8).map(c =>
-      '<div class="bcluster"><span class="count">' + c.size + '</span><span>' + esc(c.label) + '</span></div>').join('');
+    const clusters = (s.last.clusters || []).slice(0, 8).map(c => {
+      const extra = (c.texts || []).filter(t => t.toLowerCase() !== String(c.label).toLowerCase());
+      return '<div class="bcluster"><span class="count">' + c.size + '</span><span class="bclab">' + esc(c.label) + '</span>' +
+        (extra.length ? '<span class="bctexts">' + esc(extra.join('  ·  ')) + '</span>' : '') + '</div>';
+    }).join('');
     app.innerHTML = \`
       \${bannerHtml}
       <div class="bq">\${esc(s.last.question)}</div>
       <div class="bcols">
-        <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}</div>
+        <div class="bpanel"><h2>Top answers</h2>\${clusters || '<p class="muted">No answers.</p>'}<p class="bmore"><a href="/results">&raquo; full results</a></p></div>
         \${scoreTableHtml('Round scores', s.last.top)}
         \${scoreTableHtml('Leaderboard', s.leaderboard)}
         \${suggestionsHtml(s)}

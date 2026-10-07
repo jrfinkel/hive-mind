@@ -752,10 +752,14 @@ ${roundCard}
 </div>
 <h2>Danger zone</h2>
 <div class="card">
-  <form method="post" action="/admin/reset" onsubmit="return confirm('Delete EVERYTHING? All rounds, answers, scores, suggestions, votes, and players.')">
-    <button class="btn danger">Reset game</button>
+  <form method="post" action="/admin/reset-game" onsubmit="return confirm('Delete all GAME data? All rounds, answers, scores, and players. Suggested questions are kept (their votes are cleared).')">
+    <button class="btn danger">Reset game data</button>
   </form>
-  <p class="muted small" style="margin-bottom:0">Deletes everything: rounds, answers, scores, suggestions, votes, and players. <a href="/admin/logout" style="color:var(--muted)">Sign out</a></p>
+  <p class="muted small">Deletes rounds, answers, scores, and players. Suggested questions are kept (votes are cleared since the voters are deleted).</p>
+  <form method="post" action="/admin/reset-suggestions" onsubmit="return confirm('Delete all SUGGESTED QUESTIONS and their votes? Game data is kept.')">
+    <button class="btn danger">Reset suggested questions</button>
+  </form>
+  <p class="muted small" style="margin-bottom:0">Deletes the suggestion queue and its votes. Game data is kept. <a href="/admin/logout" style="color:var(--muted)">Sign out</a></p>
 </div>`;
 
   const script = `const roundKey=${JSON.stringify(round ? round.id + ":" + round.status : "none")};
@@ -984,17 +988,32 @@ app.post("/admin/rescore/:id", async (c) => {
   return c.redirect("/admin");
 });
 
-app.post("/admin/reset", async (c) => {
-  // Full wipe: rounds, answers, scores, suggestions, votes, AND players.
+app.post("/admin/reset-game", async (c) => {
+  // Game wipe: rounds, answers, scores, AND players. Suggestions survive,
+  // but their votes go (voters are deleted) and authorship is detached
+  // (suggestions.player_id references players).
   // Phones holding a stale player id get bounced back to the name prompt.
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM answers"),
     c.env.DB.prepare("DELETE FROM clusters"),
     c.env.DB.prepare("DELETE FROM rounds"),
     c.env.DB.prepare("DELETE FROM suggestion_votes"),
-    c.env.DB.prepare("DELETE FROM suggestions"),
+    c.env.DB.prepare("UPDATE suggestions SET player_id = NULL"),
     c.env.DB.prepare("DELETE FROM players"),
     c.env.DB.prepare("DELETE FROM meta"),
+  ]);
+  sharedCache = null;
+  return c.redirect("/admin");
+});
+
+app.post("/admin/reset-suggestions", async (c) => {
+  // Suggestion-queue wipe: suggested questions and their votes. Game data
+  // survives; rounds opened from a suggestion are detached first
+  // (rounds.suggestion_id references suggestions).
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE rounds SET suggestion_id = NULL"),
+    c.env.DB.prepare("DELETE FROM suggestion_votes"),
+    c.env.DB.prepare("DELETE FROM suggestions"),
   ]);
   sharedCache = null;
   return c.redirect("/admin");

@@ -352,22 +352,24 @@ app.get("/welcome", (c) => {
     layout({
       theme,
       title: "Welcome",
-      body: `
-<div class="center welcome" style="margin-top:28px">
+      body: `<style>main{max-width:1200px}</style>
+<div class="center welcome" style="margin-top:20px">
   ${theme.bannerHtml}
-  <div class="card wqr">
-    ${qrSvg}
-    <p class="big" style="margin:12px 0 0">scan to play — or go to <a href="${playUrl}"><strong>${esc(playUrl.replace(/^https?:\/\//, ""))}</strong></a></p>
-  </div>
-  <div class="card wrules">
-    <h2>How to play</h2>
-    <ol>
-      <li>Join with your name, then wait for the host to open a question.</li>
-      <li>Every question asks you to <strong>name N things</strong> — fill in all N boxes with different answers before the round closes.</li>
-      <li>Answers that mean the same thing count together (&quot;NYC&quot; = &quot;New York City&quot;). Each of your answers earns one point per player who gave a matching answer — including you.</li>
-      <li>So don't be clever: write what you think <strong>most people</strong> will write.</li>
-      <li>Between rounds, suggest questions and vote on other players' ideas.</li>
-    </ol>
+  <div class="wcols">
+    <div class="card wqr">
+      ${qrSvg}
+      <p class="big" style="margin:12px 0 0">scan to play — or go to<br><a href="${playUrl}"><strong>${esc(playUrl.replace(/^https?:\/\//, ""))}</strong></a></p>
+    </div>
+    <div class="card wrules">
+      <h2>How to play</h2>
+      <ol>
+        <li>Join with your name, then wait for the host to open a question.</li>
+        <li>Every question asks you to <strong>name N things</strong> — fill in all N boxes with different answers before the round closes.</li>
+        <li>Answers that mean the same thing count together (&quot;NYC&quot; = &quot;New York City&quot;). Each of your answers earns one point per player who gave a matching answer — including you.</li>
+        <li>So don't be clever: write what you think <strong>most people</strong> will write.</li>
+        <li>Between rounds, suggest questions and vote on other players' ideas.</li>
+      </ol>
+    </div>
   </div>
   <div class="btn-row" style="justify-content:center">
     <a class="btn" href="/play">Join the game</a>

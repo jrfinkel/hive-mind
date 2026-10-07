@@ -307,11 +307,12 @@ tr.me td { color: var(--honey); font-weight: 700; }
 .board .pspot.first .pname { font-size: 2.6em; color: var(--honey); text-shadow: 0 0 10px rgba(255,176,0,0.45); }
 .board .pspot.first .ppts { font-size: 1.5em; }
 
-/* Welcome page (/welcome): big QR + instructions */
-.welcome .wqr { display: inline-block; padding: 22px 26px; }
-.welcome .wqr svg { width: min(68vw, 360px); height: auto; display: block; margin: 0 auto; }
-.welcome .wrules { text-align: left; max-width: 640px; margin: 14px auto; }
+/* Welcome page (/welcome): big QR beside instructions (stacks on phones) */
+.welcome .wcols { display: flex; gap: 16px; justify-content: center; align-items: stretch; flex-wrap: wrap; margin-top: 10px; }
+.welcome .wqr { flex: 0 1 auto; margin: 0; padding: 22px 26px; }
+.welcome .wqr svg { width: min(68vw, 340px); height: auto; display: block; margin: 0 auto; }
+.welcome .wrules { flex: 1 1 380px; max-width: 560px; text-align: left; margin: 0; }
 .welcome .wrules h2 { margin-top: 0; }
 .welcome .wrules ol { margin: 0; padding-left: 1.4em; }
-.welcome .wrules li { margin: 9px 0; }
+.welcome .wrules li { margin: 10px 0; }
 `;

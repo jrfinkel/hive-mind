@@ -3,6 +3,10 @@ import { now } from "./types";
 
 // Fast + cheap Workers AI model used to cluster free-text answers.
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// Stronger reasoning model that reviews the proposed clusters (second
+// opinion): it evicts members that don't belong (e.g. "lost luggage"
+// sneaking into the "airplanes" cluster).
+const REVIEW_MODEL = "@cf/openai/gpt-oss-120b";
 
 type ClusterDraft = { label: string; ids: number[] };
 
@@ -29,7 +33,9 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
       // with 150 players most answers repeat, so this keeps the prompt and
       // the response small no matter the crowd size.
       const { reps, expand } = dedupe(answers);
+      const t0 = Date.now();
       const repClusters = await clusterWithAI(env, round?.question ?? "", reps);
+      console.log(`clusterWithAI: ${reps.length} reps in ${Date.now() - t0}ms`);
       clusters = repClusters.map((cl) => ({
         label: cl.label,
         ids: (Array.isArray(cl.ids) ? cl.ids : []).flatMap(
@@ -43,6 +49,28 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
     clusters = sanitize(clusters, answers);
   }
 
+  await persistClusters(env, roundId, clusters, answers);
+  await writeMeta(env, roundId);
+
+  // Queue the second-opinion pass. It runs in a separate invocation (claimed
+  // by a later poll, or awaited by the admin rescore route) because scoring
+  // usually runs in waitUntil(), whose ~30s budget fits only one model call.
+  if (answers.length > 0) {
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO meta (k, v) VALUES ('review_pending', ?)"
+    )
+      .bind(String(roundId))
+      .run();
+  }
+}
+
+/** Replace a round's clusters + per-answer points, then mark it scored. */
+async function persistClusters(
+  env: Env,
+  roundId: number,
+  clusters: ClusterDraft[],
+  answers: Answer[]
+): Promise<void> {
   // A cluster's size (and the points it awards) counts DISTINCT players, so a
   // player whose multiple answers get over-merged can't score off themselves.
   const playerOf = new Map(answers.map((a) => [a.id, a.player_id]));
@@ -50,8 +78,14 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
     new Set(cl.ids.map((id) => playerOf.get(id))).size;
   clusters.sort((x, y) => sizeOf(y) - sizeOf(x));
 
-  // Persist: clusters, then per-answer cluster assignment + points.
-  const stmts: D1PreparedStatement[] = [];
+  // Persist: wipe any previous result, then clusters, then per-answer
+  // cluster assignment + points.
+  const stmts: D1PreparedStatement[] = [
+    env.DB.prepare(
+      "UPDATE answers SET cluster_id = NULL, points = 0 WHERE round_id = ?"
+    ).bind(roundId),
+    env.DB.prepare("DELETE FROM clusters WHERE round_id = ?").bind(roundId),
+  ];
   for (const cl of clusters) {
     stmts.push(
       env.DB.prepare(
@@ -59,7 +93,7 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
       ).bind(roundId, cl.label, sizeOf(cl))
     );
   }
-  if (stmts.length) await env.DB.batch(stmts);
+  await env.DB.batch(stmts);
 
   const { results: saved } = await env.DB.prepare(
     "SELECT id, label FROM clusters WHERE round_id = ? ORDER BY id"
@@ -84,7 +118,77 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
     ).bind(now(), roundId)
   );
   await env.DB.batch(updates);
+}
 
+/**
+ * If a round is waiting for its second-opinion review, claim it (exactly one
+ * caller wins) and run the review. Any failure just leaves the first-pass
+ * scoring in place.
+ */
+export async function runPendingReview(env: Env): Promise<void> {
+  const row = await env.DB.prepare(
+    "SELECT v FROM meta WHERE k = 'review_pending'"
+  ).first<{ v: string }>();
+  if (!row) return;
+  const res = await env.DB.prepare(
+    "DELETE FROM meta WHERE k = 'review_pending' AND v = ?"
+  )
+    .bind(row.v)
+    .run();
+  if ((res.meta.changes ?? 0) === 0) return; // someone else claimed it
+  await reviewRound(env, Number(row.v));
+}
+
+/** Second-opinion pass over an already-scored round: ask a stronger model to
+ * evict cluster members that don't belong, and re-persist if it found any. */
+async function reviewRound(env: Env, roundId: number): Promise<void> {
+  const round = await env.DB.prepare(
+    "SELECT question FROM rounds WHERE id = ? AND status = 'scored'"
+  )
+    .bind(roundId)
+    .first<{ question: string }>();
+  if (!round) return;
+  const { results: answers } = await env.DB.prepare(
+    "SELECT * FROM answers WHERE round_id = ?"
+  )
+    .bind(roundId)
+    .all<Answer>();
+  const { results: cls } = await env.DB.prepare(
+    "SELECT id, label FROM clusters WHERE round_id = ?"
+  )
+    .bind(roundId)
+    .all<{ id: number; label: string }>();
+  if (!cls.length) return;
+
+  // Rebuild drafts from the stored clustering, deduped to one representative
+  // answer per distinct text within each cluster (what the reviewer sees).
+  const byCluster = new Map<number, Answer[]>();
+  for (const a of answers) {
+    if (a.cluster_id == null) continue;
+    const g = byCluster.get(a.cluster_id);
+    if (g) g.push(a);
+    else byCluster.set(a.cluster_id, [a]);
+  }
+  const drafts: ClusterDraft[] = [];
+  const reps: Answer[] = [];
+  const expand = new Map<number, number[]>();
+  for (const cl of cls) {
+    const members = byCluster.get(cl.id) ?? [];
+    if (!members.length) continue;
+    const d = dedupe(members);
+    reps.push(...d.reps);
+    for (const [k, v] of d.expand) expand.set(k, v);
+    drafts.push({ label: cl.label, ids: d.reps.map((a) => a.id) });
+  }
+
+  const reviewed = await reviewClusters(env, round.question, drafts, reps);
+  if (!reviewed) return; // reviewer approved everything
+
+  const full = reviewed.map((cl) => ({
+    label: cl.label,
+    ids: cl.ids.flatMap((id) => expand.get(Number(id)) ?? [Number(id)]),
+  }));
+  await persistClusters(env, roundId, sanitize(full, answers), answers);
   await writeMeta(env, roundId);
 }
 
@@ -299,6 +403,132 @@ async function clusterWithAI(
   }
   if (!Array.isArray(parsed.clusters)) throw new Error("missing clusters array");
   return parsed.clusters;
+}
+
+/**
+ * Second opinion on proposed clusters: a stronger model can evict members
+ * that don't belong in their group (they become their own group) and merge
+ * whole groups that refer to the same thing (the first pass sometimes leaves
+ * "pilots" and "a pilot" apart). Returns null when nothing changed.
+ */
+async function reviewClusters(
+  env: Env,
+  question: string,
+  clusters: ClusterDraft[],
+  reps: Answer[]
+): Promise<ClusterDraft[] | null> {
+  if (clusters.length < 2) return null;
+  const textOf = new Map(reps.map((a) => [a.id, a.text]));
+  const listing = clusters
+    .map(
+      (cl, i) =>
+        `G${i + 1} "${cl.label}": ` +
+        cl.ids
+          .filter((id) => textOf.has(Number(id)))
+          .map((id) => `[${id}: ${textOf.get(Number(id))}]`)
+          .join(" ")
+    )
+    .join("\n");
+  const prompt =
+    "You are reviewing grouped answers for a party game where players score by giving the same answer. " +
+    "A group must contain every answer that refers to the exact same thing, and nothing else — spelling, " +
+    "capitalization, abbreviation, plural, typo, or alternate-name variants of one thing belong together. " +
+    "Two fixes are available:\n" +
+    '1. evict: an answer id whose answer CLEARLY refers to a different thing than the rest of its group — merely related or same-category is not the same thing (e.g. "lost luggage" is not "airplanes").\n' +
+    '2. merge: group numbers that refer to the exact same thing and must be one group (e.g. a group "pilots" and a group "a pilot"; "TSA" and "airport security"). NEVER merge groups that are just related or in the same category ("coffee" and "starbucks" stay separate).\n' +
+    "Be conservative: borderline judgment calls stay as they are. " +
+    'Reply with ONLY this JSON, nothing else: {"evict":[12,34],"merge":[[1,4],[2,7]]} — use empty arrays if nothing needs fixing.\n\n' +
+    `Question: ${question}\n\nGroups:\n${listing}`;
+  const t0 = Date.now();
+  const raw = await runText(env, REVIEW_MODEL, prompt);
+  console.log(`cluster review: ${clusters.length} groups in ${Date.now() - t0}ms`);
+  // The reply object has no nested braces, so take the last {...} mentioning "evict".
+  const matches = raw.match(/\{[^{}]*"evict"[^{}]*\}/g) ?? raw.match(/\{[\s\S]*\}/g);
+  if (!matches) throw new Error("no JSON in review output: " + raw.slice(0, 200));
+  const parsed = JSON.parse(matches[matches.length - 1]) as {
+    evict?: unknown[];
+    merge?: unknown[];
+  };
+  const evict = new Set(
+    (Array.isArray(parsed.evict) ? parsed.evict : []).map(Number).filter(Number.isFinite)
+  );
+  const merges = (Array.isArray(parsed.merge) ? parsed.merge : []).filter(
+    (s): s is unknown[] => Array.isArray(s)
+  );
+  if (!evict.size && !merges.length) return null;
+
+  // Apply evictions: pull the ids out of their groups.
+  const work = clusters.map((cl) => ({
+    label: cl.label,
+    ids: cl.ids.filter((id) => !evict.has(Number(id))),
+  }));
+  // Apply merges: fold each listed group into the biggest group of its set.
+  const absorbed = new Set<number>();
+  for (const set of merges) {
+    const idxs = [
+      ...new Set(
+        set
+          .map(Number)
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= work.length)
+          .map((n) => n - 1)
+      ),
+    ].filter((i) => !absorbed.has(i));
+    if (idxs.length < 2) continue;
+    const target = idxs.reduce((a, b) => (work[a].ids.length >= work[b].ids.length ? a : b));
+    for (const i of idxs) {
+      if (i === target) continue;
+      absorbed.add(i);
+      work[target].ids.push(...work[i].ids);
+      work[i].ids = [];
+    }
+  }
+
+  console.log(
+    "cluster review:",
+    `evicted [${[...evict].map((id) => textOf.get(id) ?? id).join(", ")}],`,
+    `merged [${merges.map((s) => s.join("+")).join(" ")}]`
+  );
+  const out: ClusterDraft[] = work.filter((cl) => cl.ids.length);
+  for (const id of evict) {
+    if (textOf.has(id)) out.push({ label: textOf.get(id)!, ids: [id] });
+  }
+  return out;
+}
+
+/** Run a plain-text prompt; handles both Workers AI input schemas (gpt-oss
+ * models use Responses-style `input`, most others use chat `messages`). */
+async function runText(env: Env, model: string, prompt: string): Promise<string> {
+  const m = model as Parameters<Ai["run"]>[0];
+  try {
+    return extractText(await env.AI.run(m, { input: prompt } as never));
+  } catch {
+    return extractText(
+      await env.AI.run(m, {
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 2048,
+      } as never)
+    );
+  }
+}
+
+/** Pull the text out of whichever response shape the model returned. */
+function extractText(res: unknown): string {
+  if (typeof res === "string") return res;
+  const r = res as Record<string, unknown>;
+  if (typeof r?.response === "string") return r.response;
+  // Responses-API shape: output[] items with content[] parts carrying text.
+  if (Array.isArray(r?.output)) {
+    const texts: string[] = [];
+    for (const item of r.output as Array<Record<string, unknown>>) {
+      if (Array.isArray(item?.content)) {
+        for (const part of item.content as Array<Record<string, unknown>>) {
+          if (typeof part?.text === "string") texts.push(part.text);
+        }
+      }
+    }
+    if (texts.length) return texts.join("\n");
+  }
+  throw new Error("no text in model output: " + JSON.stringify(res).slice(0, 300));
 }
 
 /** Fallback: group answers whose normalized text matches exactly. */

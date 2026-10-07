@@ -5,7 +5,7 @@ import { now } from "./types";
 import { renderSVG } from "uqr";
 import { layout, esc } from "./ui";
 import { getTheme } from "./theme";
-import { scoreRound } from "./scoring";
+import { scoreRound, runPendingReview } from "./scoring";
 
 const app = new Hono<{ Bindings: Env }>();
 type C = Context<{ Bindings: Env }>;
@@ -171,15 +171,16 @@ async function computeSharedState(c: C): Promise<Record<string, unknown>> {
 
   // Precomputed at scoring time (see scoring.ts writeMeta).
   const { results: meta } = await c.env.DB.prepare(
-    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over', 'round_ranks', 'overall_ranks')"
+    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over', 'round_ranks', 'overall_ranks', 'review_pending')"
   ).all<{ k: string; v: string }>();
   for (const m of meta) {
     if (m.k === "last_results") out.last = JSON.parse(m.v);
     if (m.k === "leaderboard") out.leaderboard = JSON.parse(m.v);
     if (m.k === "game_over") out.finale = true;
-    // Internal (contain player ids) — stripped from every /api/state response.
+    // Internal — stripped from every /api/state response.
     if (m.k === "round_ranks") out._round_ranks = JSON.parse(m.v);
     if (m.k === "overall_ranks") out._overall_ranks = JSON.parse(m.v);
+    if (m.k === "review_pending") out._review_pending = true;
   }
   out.leaderboard ??= [];
 
@@ -426,6 +427,19 @@ app.get("/api/state", async (c) => {
   }
   const shared = sharedCache.data;
   const out: Record<string, unknown> = { ...shared, server_time: t };
+  // A scored round awaiting its second-opinion review: run it off this poll.
+  // (runPendingReview claims atomically, so concurrent polls race safely.)
+  if (out._review_pending) {
+    c.executionCtx.waitUntil(
+      runPendingReview(c.env).then(
+        () => {
+          sharedCache = null; // review may have changed the published results
+        },
+        (e) => console.error("cluster review failed", e)
+      )
+    );
+  }
+  delete out._review_pending;
   // Never ship the internal rank maps (they're keyed by player id).
   const roundRanks = out._round_ranks as { round_id: number; ranks: Record<string, number> } | undefined;
   const overallRanks = out._overall_ranks as Record<string, number> | undefined;
@@ -983,7 +997,11 @@ app.post("/admin/rescore/:id", async (c) => {
       c.env.DB.prepare("UPDATE answers SET cluster_id = NULL, points = 0 WHERE round_id = ?").bind(id),
       c.env.DB.prepare("DELETE FROM clusters WHERE round_id = ?").bind(id),
     ]);
-    startScoring(c, id);
+    // Awaited (not waitUntil): the admin waits out both the clustering and
+    // the second-opinion review, so neither hits the waitUntil time budget.
+    await scoreRound(c.env, id).catch((e) => console.error("scoreRound failed", e));
+    await runPendingReview(c.env).catch((e) => console.error("cluster review failed", e));
+    sharedCache = null;
   }
   return c.redirect("/admin");
 });

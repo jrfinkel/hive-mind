@@ -1265,7 +1265,7 @@ function renderSuggestions(s) {
   if (!document.getElementById('voteBox')) {
     // Static shell built once (the suggest form must survive polls),
     // only the vote list re-renders.
-    el.innerHTML = '<h2>Vote on upcoming questions</h2><div class="card" id="voteBox">' +
+    el.innerHTML = '<h2>Vote on upcoming questions — or add your own</h2><div class="card" id="voteBox">' +
       '<div id="voteList"></div>' +
       '<form id="sugForm" class="qcompose" style="margin-top:12px">' +
         '<span class="qword">Name</span>' +

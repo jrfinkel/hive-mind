@@ -171,7 +171,7 @@ async function computeSharedState(c: C): Promise<Record<string, unknown>> {
 
   // Precomputed at scoring time (see scoring.ts writeMeta).
   const { results: meta } = await c.env.DB.prepare(
-    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over', 'round_ranks', 'overall_ranks', 'review_pending')"
+    "SELECT k, v FROM meta WHERE k IN ('last_results', 'leaderboard', 'game_over', 'round_ranks', 'overall_ranks')"
   ).all<{ k: string; v: string }>();
   for (const m of meta) {
     if (m.k === "last_results") out.last = JSON.parse(m.v);
@@ -180,7 +180,6 @@ async function computeSharedState(c: C): Promise<Record<string, unknown>> {
     // Internal — stripped from every /api/state response.
     if (m.k === "round_ranks") out._round_ranks = JSON.parse(m.v);
     if (m.k === "overall_ranks") out._overall_ranks = JSON.parse(m.v);
-    if (m.k === "review_pending") out._review_pending = true;
   }
   out.leaderboard ??= [];
 
@@ -471,19 +470,6 @@ app.get("/api/state", async (c) => {
   }
   const shared = sharedCache.data;
   const out: Record<string, unknown> = { ...shared, server_time: t };
-  // A scored round awaiting its second-opinion review: run it off this poll.
-  // (runPendingReview claims atomically, so concurrent polls race safely.)
-  if (out._review_pending) {
-    c.executionCtx.waitUntil(
-      runPendingReview(c.env).then(
-        () => {
-          sharedCache = null; // review may have changed the published results
-        },
-        (e) => console.error("cluster review failed", e)
-      )
-    );
-  }
-  delete out._review_pending;
   // Never ship the internal rank maps (they're keyed by player id).
   const roundRanks = out._round_ranks as { round_id: number; ranks: Record<string, number> } | undefined;
   const overallRanks = out._overall_ranks as Record<string, number> | undefined;
@@ -957,7 +943,7 @@ app.post("/admin/open", async (c) => {
       c.env.DB.prepare("DELETE FROM clusters"),
       c.env.DB.prepare("DELETE FROM rounds"),
       c.env.DB.prepare(
-        "DELETE FROM meta WHERE k IN ('last_results', 'leaderboard', 'round_ranks', 'overall_ranks', 'game_over')"
+        "DELETE FROM meta WHERE k IN ('last_results', 'leaderboard', 'round_ranks', 'overall_ranks', 'game_over', 'review_pending', 'review_apply')"
       )
     );
   }
@@ -1041,10 +1027,10 @@ app.post("/admin/rescore/:id", async (c) => {
       c.env.DB.prepare("UPDATE answers SET cluster_id = NULL, points = 0 WHERE round_id = ?").bind(id),
       c.env.DB.prepare("DELETE FROM clusters WHERE round_id = ?").bind(id),
     ]);
-    // Awaited (not waitUntil): the admin waits out both the clustering and
-    // the second-opinion review, so neither hits the waitUntil time budget.
-    await scoreRound(c.env, id).catch((e) => console.error("scoreRound failed", e));
-    await runPendingReview(c.env).catch((e) => console.error("cluster review failed", e));
+    // Awaited (not waitUntil or queue): the admin waits out both the
+    // clustering and the second-opinion review, so the result is final.
+    await scoreRound(c.env, id, false).catch((e) => console.error("scoreRound failed", e));
+    await runPendingReview(c.env, true).catch((e) => console.error("cluster review failed", e));
     sharedCache = null;
   }
   return c.redirect("/admin");
@@ -1467,4 +1453,16 @@ poll();
 setInterval(poll, 2000);
 `;
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // The cluster review runs here, not in a request's waitUntil(): a queue
+  // consumer gets a generous time budget (the review model call alone can
+  // take ~25s) and failed deliveries are retried automatically.
+  async queue(batch: MessageBatch<{ round_id: number }>, env: Env) {
+    for (const msg of batch.messages) {
+      await runPendingReview(env, true);
+      msg.ack();
+    }
+    sharedCache = null; // the review may have changed the published results
+  },
+};

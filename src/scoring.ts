@@ -16,7 +16,11 @@ type ClusterDraft = { label: string; ids: number[] };
  * The caller must have already claimed the round (status = 'scoring') so this
  * runs exactly once.
  */
-export async function scoreRound(env: Env, roundId: number): Promise<void> {
+export async function scoreRound(
+  env: Env,
+  roundId: number,
+  queueReview = true
+): Promise<void> {
   const round = await env.DB.prepare("SELECT * FROM rounds WHERE id = ?")
     .bind(roundId)
     .first<{ question: string }>();
@@ -52,15 +56,21 @@ export async function scoreRound(env: Env, roundId: number): Promise<void> {
   await persistClusters(env, roundId, clusters, answers);
   await writeMeta(env, roundId);
 
-  // Queue the second-opinion pass. It runs in a separate invocation (claimed
-  // by a later poll, or awaited by the admin rescore route) because scoring
-  // usually runs in waitUntil(), whose ~30s budget fits only one model call.
+  // Queue the second-opinion pass. It needs its own invocation with a real
+  // time budget (the review model call can take ~25s, more than the ~30s
+  // waitUntil window scoring usually runs in), so a queue consumer picks the
+  // flag up; the admin rescore route instead awaits it inline.
   if (answers.length > 0) {
-    await env.DB.prepare(
-      "INSERT OR REPLACE INTO meta (k, v) VALUES ('review_pending', ?)"
-    )
-      .bind(String(roundId))
-      .run();
+    await env.DB.batch([
+      // A re-score invalidates any not-yet-applied review of this round.
+      env.DB.prepare(
+        "DELETE FROM meta WHERE k = 'review_apply' AND json_extract(v, '$.round_id') = ?"
+      ).bind(roundId),
+      env.DB.prepare(
+        "INSERT OR REPLACE INTO meta (k, v) VALUES ('review_pending', ?)"
+      ).bind(JSON.stringify({ round_id: roundId, lease_until: 0, attempts: 0 })),
+    ]);
+    if (queueReview) await env.REVIEW_QUEUE.send({ round_id: roundId });
   }
 }
 
@@ -121,26 +131,101 @@ async function persistClusters(
 }
 
 /**
- * If a round is waiting for its second-opinion review, claim it (exactly one
- * caller wins) and run the review. Any failure just leaves the first-pass
- * scoring in place.
+ * Advance the second-opinion pipeline by one step (or all steps when `all`).
+ * The pipeline has two phases, each sized to fit a waitUntil() budget:
+ *   review_pending -> run the review model, store its verdict as review_apply
+ *   review_apply   -> apply the verdict to clusters/points/meta (fast writes)
+ * Claims are atomic (delete-if-value), so concurrent polls race safely, and
+ * any failure simply leaves the first-pass scoring in place.
  */
-export async function runPendingReview(env: Env): Promise<void> {
-  const row = await env.DB.prepare(
-    "SELECT v FROM meta WHERE k = 'review_pending'"
-  ).first<{ v: string }>();
-  if (!row) return;
-  const res = await env.DB.prepare(
-    "DELETE FROM meta WHERE k = 'review_pending' AND v = ?"
-  )
-    .bind(row.v)
-    .run();
-  if ((res.meta.changes ?? 0) === 0) return; // someone else claimed it
-  await reviewRound(env, Number(row.v));
+export async function runPendingReview(env: Env, all = false): Promise<void> {
+  for (let step = 0; step < 4; step++) {
+    const apply = await claimLease(env, "review_apply", 5, 45);
+    if (apply) {
+      await applyReview(env, apply);
+      await finishFlag(env, "review_apply", apply.round_id);
+      if (!all) return;
+      continue;
+    }
+    const pending = await claimLease(env, "review_pending", 4, 60);
+    if (pending) {
+      await reviewRound(env, pending.round_id);
+      await finishFlag(env, "review_pending", pending.round_id);
+      if (!all) return;
+      continue;
+    }
+    return;
+  }
 }
 
-/** Second-opinion pass over an already-scored round: ask a stronger model to
- * evict cluster members that don't belong, and re-persist if it found any. */
+type LeaseFlag = { round_id: number; lease_until: number; attempts: number; clusters?: ClusterDraft[] };
+
+/**
+ * Lease a meta flag: one caller wins and gets `leaseS` seconds to finish.
+ * If its invocation is cancelled mid-work (waitUntil time budget), the lease
+ * expires and a later poll retries — up to `maxAttempts` times, after which
+ * the flag is dropped and the first-pass scoring stands.
+ */
+async function claimLease(
+  env: Env,
+  k: string,
+  maxAttempts: number,
+  leaseS: number
+): Promise<LeaseFlag | null> {
+  const row = await env.DB.prepare("SELECT v FROM meta WHERE k = ?")
+    .bind(k)
+    .first<{ v: string }>();
+  if (!row) return null;
+  let flag: LeaseFlag;
+  try {
+    flag = JSON.parse(row.v);
+  } catch {
+    await env.DB.prepare("DELETE FROM meta WHERE k = ? AND v = ?").bind(k, row.v).run();
+    return null;
+  }
+  const t = now();
+  if ((flag.lease_until ?? 0) > t) return null; // someone is working on it
+  if ((flag.attempts ?? 0) >= maxAttempts) {
+    console.error(`${k}: giving up on round ${flag.round_id} after ${flag.attempts} attempts`);
+    await env.DB.prepare("DELETE FROM meta WHERE k = ? AND v = ?").bind(k, row.v).run();
+    return null;
+  }
+  const next = JSON.stringify({
+    ...flag,
+    lease_until: t + leaseS,
+    attempts: (flag.attempts ?? 0) + 1,
+  });
+  const res = await env.DB.prepare("UPDATE meta SET v = ? WHERE k = ? AND v = ?")
+    .bind(next, k, row.v)
+    .run();
+  return (res.meta.changes ?? 0) > 0 ? flag : null;
+}
+
+/** Clear a flag after its work completed (only if it's still for our round). */
+async function finishFlag(env: Env, k: string, roundId: number): Promise<void> {
+  await env.DB.prepare(
+    "DELETE FROM meta WHERE k = ? AND json_extract(v, '$.round_id') = ?"
+  )
+    .bind(k, roundId)
+    .run();
+}
+
+/** Write a stored review verdict: replace the round's clusters and points. */
+async function applyReview(env: Env, flag: LeaseFlag): Promise<void> {
+  const clusters = flag.clusters ?? [];
+  const { results: answers } = await env.DB.prepare(
+    "SELECT * FROM answers WHERE round_id = ?"
+  )
+    .bind(flag.round_id)
+    .all<Answer>();
+  if (!answers.length || !clusters.length) return; // round wiped since review
+  await persistClusters(env, flag.round_id, sanitize(clusters, answers), answers);
+  await writeMeta(env, flag.round_id);
+  console.log(`cluster review applied to round ${flag.round_id}`);
+}
+
+/** Second-opinion pass over an already-scored round: ask a stronger model
+ * what to fix; store the resulting clustering for the apply phase. */
 async function reviewRound(env: Env, roundId: number): Promise<void> {
   const round = await env.DB.prepare(
     "SELECT question FROM rounds WHERE id = ? AND status = 'scored'"
@@ -188,8 +273,12 @@ async function reviewRound(env: Env, roundId: number): Promise<void> {
     label: cl.label,
     ids: cl.ids.flatMap((id) => expand.get(Number(id)) ?? [Number(id)]),
   }));
-  await persistClusters(env, roundId, sanitize(full, answers), answers);
-  await writeMeta(env, roundId);
+  // Hand off to the apply phase rather than writing here: the model call
+  // above may have eaten most of this invocation's time budget, and the
+  // writes must never be cancelled halfway through.
+  await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('review_apply', ?)")
+    .bind(JSON.stringify({ round_id: roundId, lease_until: 0, attempts: 0, clusters: full }))
+    .run();
 }
 
 /**
@@ -315,10 +404,11 @@ async function writeMeta(env: Env, roundId: number): Promise<void> {
 }
 
 /** Group answers whose normalized text matches exactly; return one
- * representative per group plus a map to expand back to all ids. */
+ * representative per group plus a map to expand back to all ids.
+ * Spaces are ignored entirely: "hot dogs" and "hotdogs" are the same answer. */
 function dedupe(answers: Answer[]): { reps: Answer[]; expand: Map<number, number[]> } {
   const norm = (s: string) =>
-    s.toLowerCase().trim().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ");
+    s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   const groups = new Map<string, Answer[]>();
   for (const a of answers) {
     const key = norm(a.text) || a.text;
@@ -434,10 +524,12 @@ async function reviewClusters(
     "A group must contain every answer that refers to the exact same thing, and nothing else — spelling, " +
     "capitalization, abbreviation, plural, typo, or alternate-name variants of one thing belong together. " +
     "Two fixes are available:\n" +
-    '1. evict: an answer id whose answer CLEARLY refers to a different thing than the rest of its group — merely related or same-category is not the same thing (e.g. "lost luggage" is not "airplanes").\n' +
+    '1. evict: remove answers that CLEARLY refer to a different thing than the rest of their group — merely related or same-category is not the same thing (e.g. "lost luggage" is not "airplanes"). ' +
+    "Each evict entry is a list of answer ids that leave their groups and together form ONE new group, so evicted ids that are variants of the same thing go in the SAME entry " +
+    '(e.g. "hot dogs" and "hotdogs" wrongly placed in a "hamburgers" group leave together as one entry), and unrelated evictions go in separate entries.\n' +
     '2. merge: group numbers that refer to the exact same thing and must be one group (e.g. a group "pilots" and a group "a pilot"; "TSA" and "airport security"). NEVER merge groups that are just related or in the same category ("coffee" and "starbucks" stay separate).\n' +
     "Be conservative: borderline judgment calls stay as they are. " +
-    'Reply with ONLY this JSON, nothing else: {"evict":[12,34],"merge":[[1,4],[2,7]]} — use empty arrays if nothing needs fixing.\n\n' +
+    'Reply with ONLY this JSON, nothing else: {"evict":[[12,34],[56]],"merge":[[1,4],[2,7]]} — use empty arrays if nothing needs fixing.\n\n' +
     `Question: ${question}\n\nGroups:\n${listing}`;
   const t0 = Date.now();
   const raw = await runText(env, REVIEW_MODEL, prompt);
@@ -449,9 +541,13 @@ async function reviewClusters(
     evict?: unknown[];
     merge?: unknown[];
   };
-  const evict = new Set(
-    (Array.isArray(parsed.evict) ? parsed.evict : []).map(Number).filter(Number.isFinite)
-  );
+  // Each evict entry is a set of ids that leaves as one new group; tolerate
+  // the model returning bare ids instead of lists.
+  const evictGroups = (Array.isArray(parsed.evict) ? parsed.evict : [])
+    .map((e) => (Array.isArray(e) ? e.map(Number) : [Number(e)]))
+    .map((g) => g.filter((n) => Number.isFinite(n) && textOf.has(n)))
+    .filter((g) => g.length);
+  const evict = new Set(evictGroups.flat());
   const merges = (Array.isArray(parsed.merge) ? parsed.merge : []).filter(
     (s): s is unknown[] => Array.isArray(s)
   );
@@ -485,12 +581,12 @@ async function reviewClusters(
 
   console.log(
     "cluster review:",
-    `evicted [${[...evict].map((id) => textOf.get(id) ?? id).join(", ")}],`,
+    `evicted [${evictGroups.map((g) => g.map((id) => textOf.get(id)).join("+")).join("; ")}],`,
     `merged [${merges.map((s) => s.join("+")).join(" ")}]`
   );
   const out: ClusterDraft[] = work.filter((cl) => cl.ids.length);
-  for (const id of evict) {
-    if (textOf.has(id)) out.push({ label: textOf.get(id)!, ids: [id] });
+  for (const g of evictGroups) {
+    out.push({ label: textOf.get(g[0])!, ids: g });
   }
   return out;
 }
@@ -531,10 +627,11 @@ function extractText(res: unknown): string {
   throw new Error("no text in model output: " + JSON.stringify(res).slice(0, 300));
 }
 
-/** Fallback: group answers whose normalized text matches exactly. */
+/** Fallback: group answers whose normalized text matches exactly
+ * (ignoring case, punctuation, and spacing). */
 export function clusterExact(answers: Answer[]): ClusterDraft[] {
   const norm = (s: string) =>
-    s.toLowerCase().trim().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ");
+    s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   const groups = new Map<string, ClusterDraft>();
   for (const a of answers) {
     const key = norm(a.text) || a.text;

@@ -71,6 +71,23 @@ R2_POOL = {
     "pilots": ["pilots", "a pilot"],
     "announcements": ["boarding announcements", "loudspeaker announcements"],
 }
+R3_POOL = {
+    # deliberate clustering traps: variants that must merge, neighbors that must not
+    "hotdogs": ["hot dogs", "hotdogs", "hot dog"],
+    "burgers": ["hamburgers", "burgers", "a burger", "hamburger"],
+    "corn": ["corn on the cob", "corn"],
+    "watermelon": ["watermelon", "water melon", "watermelon slices"],
+    "potatosalad": ["potato salad"],
+    "coleslaw": ["coleslaw", "cole slaw"],
+    "grill": ["the grill", "a grill", "charcoal grill"],
+    "ketchup": ["ketchup", "catsup"],
+    "mustard": ["mustard"],
+    "beer": ["beer", "cold beer"],
+    "lemonade": ["lemonade"],
+    "paperplates": ["paper plates"],
+    "ribs": ["ribs", "bbq ribs"],
+    "frisbee": ["frisbee"],
+}
 SUGGESTIONS = [
     (3, "parsing algorithms"), (2, "reasons to retire"), (4, "Stanford buildings"),
     (3, "linguistics terms"), (2, "things Chris says in lecture"), (3, "conference venues"),
@@ -172,7 +189,8 @@ class Bot(threading.Thread):
                 if self.answer_at is None:
                     self.answer_at = time.time() + random.uniform(4, 42)
                 if time.time() >= self.answer_at:
-                    pool = R1_POOL if rnd["num"] == 3 else R2_POOL
+                    q = (rnd.get("question") or "").lower()
+                    pool = R1_POOL if "nlp" in q else R2_POOL if "airport" in q else R3_POOL
                     texts = pick_answers(pool, rnd["num"])
                     r = timed(self.sess, "POST", "/api/answer", kind="answer",
                               json={"player_id": self.pid, "round_id": rid, "texts": texts})
@@ -211,7 +229,7 @@ class Bot(threading.Thread):
 joined: list[str] = []
 answers_in: list[float] = []
 round_ids: list[int] = []
-round_open_t: dict[int, float | None] = {1: None, 2: None}
+round_open_t: dict[int, float | None] = {1: None, 2: None, 3: None}
 stop_flag = threading.Event()
 
 def admin_session():
@@ -271,28 +289,31 @@ def main():
     run_round(adm, 1, 3, "NLP researchers", 2)
     log("between rounds: players looking at results / voting (15s)")
     time.sleep(15)
-    s2 = run_round(adm, 2, 2, "things you find at an airport", 2)
+    run_round(adm, 2, 2, "things you find at an airport", 2)
+    log("between rounds: players looking at results / voting (15s)")
+    time.sleep(15)
+    s3 = run_round(adm, 3, 3, "things at a backyard barbecue", 2)
 
     time.sleep(8)  # let every poller see the final results
     stop_flag.set()
     time.sleep(3)
 
     # --- verification + report ----------------------------------------------
-    lb = s2.get("leaderboard", [])
+    lb = s3.get("leaderboard", [])
     log(f"leaderboard top 5: {[(r['name'], r['pts']) for r in lb[:5]]}")
     pollers = [b for b in bots if b.pid]
     awake = [b for b in pollers if not b.sleeper]
     saw_open = sum(1 for b in pollers if "open" in b.saw)
     saw_results = sum(1 for b in pollers if "results" in b.saw)
     saw_place = sum(1 for b in pollers if b.saw_place)
-    both = sum(1 for b in awake if len(b.answered_rounds) == 2)
-    r2_only_wakers = sum(1 for b in pollers if b.sleeper and b.waker and len(b.answered_rounds) == 1)
+    both = sum(1 for b in awake if len(b.answered_rounds) == 3)
+    r2_only_wakers = sum(1 for b in pollers if b.sleeper and b.waker and len(b.answered_rounds) == 2)
     print()
     log("=== VERIFICATION ===")
     log(f"joined: {len(joined)}/{N_PLAYERS}")
     log(f"saw an open question: {saw_open}/{len(pollers)}")
-    log(f"awake players who answered both rounds: {both}/{len(awake)}")
-    log(f"sleepers who woke and answered round 2: {r2_only_wakers}/{N_WAKERS}")
+    log(f"awake players who answered all 3 rounds: {both}/{len(awake)}")
+    log(f"sleepers who woke and answered rounds 2+3: {r2_only_wakers}/{N_WAKERS}")
     log(f"saw their own results page data: {saw_results}/{len(pollers)}")
     log(f"saw personal rank stats: {saw_place}/{len(pollers)}")
     log(f"errors: {len(errors)}" + (f" (first: {errors[:5]})" if errors else ""))

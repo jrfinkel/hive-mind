@@ -1,6 +1,8 @@
 export type Env = {
   DB: D1Database;
   AI: Ai;
+  /** Triggers the post-scoring cluster review with a generous time budget. */
+  REVIEW_QUEUE: Queue<{ round_id: number }>;
   ADMIN_PASSWORD: string;
   PLAYER_PASSWORD: string;
   /** Picks the skin (see src/theme.ts): "hive" (default) or "bearplane". */

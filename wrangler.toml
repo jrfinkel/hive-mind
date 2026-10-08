@@ -30,6 +30,18 @@ ADMIN_PASSWORD = "lundard-boss"
 PLAYER_PASSWORD = "lundard"
 THEME = "hive"
 
+# --- Queue: runs the post-scoring AI cluster review with a real time budget
+# (a request's waitUntil() gets ~30s, too tight for the review model call).
+# Created once with:  npx wrangler queues create hive-review
+[[queues.producers]]
+binding = "REVIEW_QUEUE"
+queue = "hive-review"
+
+[[queues.consumers]]
+queue = "hive-review"
+max_batch_size = 1
+max_retries = 3
+
 # ---------------------------------------------------------------------------
 # Second copy of the game: same code, own DB, own URL, kitschy mountain skin.
 #   deploy:      npx wrangler deploy --env bearplane
@@ -56,3 +68,12 @@ directory = "./public"
 ADMIN_PASSWORD = "flyboss"
 PLAYER_PASSWORD = "fly"
 THEME = "bearplane"
+
+[[env.bearplane.queues.producers]]
+binding = "REVIEW_QUEUE"
+queue = "bear-review"
+
+[[env.bearplane.queues.consumers]]
+queue = "bear-review"
+max_batch_size = 1
+max_retries = 3
